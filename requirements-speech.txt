@@ -1,0 +1,9 @@
+# 语音相关依赖（可选；scripts\install.ps1 -NoSpeech 会跳过这一份）
+
+# 语音识别：CTranslate2 版 Whisper，int8 量化后约 1.6GB 显存
+faster-whisper>=1.0.3
+# 在线兜底音色（免费、无需 API Key，中文音质好）
+edge-tts>=6.1.9
+# soundfile（自带 libsndfile）：把在线音色的 MP3 转成 WAV，用来做 IndexTTS2 的
+# 参考音色（tools\make_reference.py）。没有它就得依赖 ffmpeg，而 ffmpeg 是可选项。
+soundfile>=0.12

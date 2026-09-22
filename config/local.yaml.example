@@ -1,0 +1,52 @@
+# ============================================================================
+# 可选覆盖文件示例
+#
+# 这个文件的作用：不改动 config/config.yaml（随版本更新，可能被覆盖），
+# 只在这里写你想改的项。优先级高于 config.yaml，低于环境变量。
+#
+# 用法：把本文件复制成 config/local.yaml，然后按需取消注释。
+# 注意：网页「系统设置」也会写 config/local.yaml —— 程序生成的注释更少，
+#       手动编辑前建议先停掉服务，避免互相覆盖。
+# ============================================================================
+
+# ---- 路径（想把模型或数据放到别的盘时改这里）----
+# paths:
+#   root: D:\Harness\ChatBot
+
+# ---- 主模型 ----
+# llm:
+#   # 换成 14B 档位后，这里要和 scripts/start-models.ps1 的 --alias 对应
+#   model: qwen3.5-14b
+#   temperature: 0.7        # 越低越稳定，越高越有创造力
+#   max_tokens: 900
+#   context_tokens: 16384   # 14B 档位可以开到 16K；27B 档位建议 8192
+#   mock: false
+
+# ---- 记忆 ----
+# memory:
+#   token_budget: 1600          # 注入提示词的记忆块预算，越大记得越多但挤占对话
+#   top_k: 18
+#   recency_half_life_days: 30  # 越大越"念旧"；越小越只关注近期
+#   w_dense: 1.2                # 想更依赖语义相似度就调大
+#   w_lexical: 0.6              # 人名/专有名词召回不准时调大
+#   w_graph: 0.8                # 关系类问题答不好时调大
+#   consolidation_interval_s: 3600
+#   extract_async: true         # 关掉会拖慢回复，但抽取时序更确定
+
+# ---- 语音 ----
+# speech:
+#   # 27B 档位的推荐组合：GPU 全留给大模型，语音走 CPU + 在线音色
+#   stt_device: cpu
+#   stt_compute_type: int8
+#   tts_preference: [edge, sapi]
+#   stt_idle_unload_s: 300
+#   stt_model: small            # 显存/内存紧张时改小
+
+# ---- 服务 ----
+# server:
+#   port: 8077
+#   allow_lan: true             # 手机访问；注意无鉴权，仅限可信网络
+
+# ---- 调试 ----
+# debug: true                   # 打开后 API 会返回检索明细与评分拆解
+# log_level: DEBUG

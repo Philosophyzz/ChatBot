@@ -1,0 +1,18 @@
+# 运行本项目所需的 Python 依赖（唯一来源）
+#
+# scripts\install.ps1 读这个文件装依赖；手工装（例如 conda 环境）也用同一份：
+#     pip install -r requirements.txt -r requirements-speech.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+#
+# 语音相关的依赖（faster-whisper / edge-tts / soundfile）在 requirements-speech.txt，
+# 用 scripts\install.ps1 -NoSpeech 可以跳过它们（不装也能纯文字聊天）。
+
+fastapi>=0.110
+uvicorn[standard]>=0.29
+httpx>=0.27
+pydantic>=2.6
+numpy>=1.26
+python-multipart>=0.0.9
+PyYAML>=6.0
+websockets>=12.0
+# 测试依赖：selftest.ps1 与 verify.ps1 会跑 tests\，没有 pytest 就会失败。
+pytest>=8.0

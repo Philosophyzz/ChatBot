@@ -1,0 +1,43 @@
+# 换行与编码的约定。
+#
+# 为什么专门写这个文件：本项目的 PowerShell 脚本**必须带 UTF-8 BOM**（没有 BOM 时
+# Windows PowerShell 5.1 会按 GBK 读，中文注释变乱码并直接语法错误），而 Python 文件
+# **必须不带 BOM**。git 默认的换行转换不会动 BOM，但会改写字节；显式声明能保证
+# 「克隆下来就能跑」，而不会因为平台差异破掉 scripts\fix-encoding.ps1 的检查。
+#
+# 检查方式（克隆后第一件事）：
+#   powershell -ExecutionPolicy Bypass -File scripts\fix-encoding.ps1 -CheckOnly
+
+* text=auto
+
+# PowerShell：工作区固定 CRLF（BOM 由文件内容保留）
+*.ps1   text eol=crlf
+*.psm1  text eol=crlf
+
+# Python / 配置 / 前端：统一 LF，避免不同平台产生整文件 diff
+*.py    text eol=lf
+*.md    text eol=lf
+*.json  text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.js    text eol=lf
+*.css   text eol=lf
+*.html  text eol=lf
+*.ini   text eol=lf
+*.txt   text eol=lf
+*.toml  text eol=lf
+
+# 二进制：不要做任何转换
+*.ico   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.webp  binary
+*.wav   binary
+*.mp3   binary
+*.exe   binary
+*.dll   binary
+*.zip   binary
+
+# GitHub 语言统计：把生成物与前端资源排除在"语言占比"之外
+web/assets/*.css linguist-vendored=false

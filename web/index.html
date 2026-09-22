@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>本地聊天机器人</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ================= 侧边栏 ================= -->
+  <aside id="sidebar" class="collapsed">
+    <div class="side-head">
+      <div class="brand"><span class="dot" id="conn-dot"></span><b>本地助手</b></div>
+      <button class="icon-btn" data-action="new-session" title="新建对话">＋</button>
+    </div>
+
+    <nav class="tabs" role="tablist">
+      <button class="tab active" data-tab="sessions">对话</button>
+      <button class="tab" data-tab="personas">人设</button>
+      <button class="tab" data-tab="memory">记忆</button>
+      <button class="tab" data-tab="system">系统</button>
+    </nav>
+
+    <div class="tab-panels">
+      <!-- 对话列表 -->
+      <section class="panel active" data-panel="sessions">
+        <div id="session-list" class="list"></div>
+      </section>
+
+      <!-- 人设 -->
+      <section class="panel" data-panel="personas">
+        <div id="persona-list" class="list"></div>
+        <div class="panel-actions">
+          <button class="ghost-btn" data-action="persona-new">＋ 新建人设</button>
+        </div>
+      </section>
+
+      <!-- 记忆 -->
+      <section class="panel" data-panel="memory">
+        <div class="search-row">
+          <input id="memory-search" type="search" placeholder="搜索记忆 / 聊天记录…" autocomplete="off">
+          <button class="icon-btn" data-action="memory-search" title="搜索">🔍</button>
+        </div>
+        <div class="subtabs">
+          <button class="subtab active" data-sub="items">条目</button>
+          <button class="subtab" data-sub="profile">档案</button>
+          <button class="subtab" data-sub="graph">图谱</button>
+          <button class="subtab" data-sub="history">历史</button>
+        </div>
+        <div id="memory-body" class="list scroll"></div>
+        <div class="panel-actions">
+          <button class="ghost-btn" data-action="memory-consolidate">立即整理记忆</button>
+        </div>
+      </section>
+
+      <!-- 系统 -->
+      <section class="panel" data-panel="system">
+        <div class="model-card">
+          <div class="model-head">
+            <strong>底座模型</strong>
+            <span id="model-current" class="model-current">读取中…</span>
+          </div>
+          <select id="model-select" aria-label="选择底座模型"></select>
+          <div id="model-meta" class="model-meta"></div>
+          <div class="panel-actions">
+            <button class="primary-btn" data-action="switch-model" id="btn-switch-model">切换模型</button>
+            <button class="ghost-btn" data-action="refresh-models">重新读取</button>
+          </div>
+          <div id="model-hint" class="model-hint hidden"></div>
+        </div>
+        <div id="health-body" class="list scroll"></div>
+        <div class="panel-actions">
+          <button class="ghost-btn" data-action="refresh-health">刷新状态</button>
+        </div>
+      </section>
+    </div>
+  </aside>
+
+  <!-- ================= 主区 ================= -->
+  <main id="main">
+    <header id="topbar">
+      <button class="icon-btn" data-action="toggle-sidebar" title="展开/收起侧栏">☰</button>
+      <div class="persona-pill" data-action="focus-persona" title="切换人设">
+        <span id="persona-avatar">🌸</span>
+        <span id="persona-name">小甜</span>
+      </div>
+      <select id="persona-select" class="hidden" aria-label="选择人设"></select>
+      <div class="spacer"></div>
+      <label class="switch" title="自动朗读回复">
+        <input type="checkbox" id="autospeak">
+        <span>自动朗读</span>
+      </label>
+      <button class="icon-btn" id="btn-stop" title="停止生成" hidden>■</button>
+      <button class="icon-btn" data-action="toggle-debug" title="显示检索详情">🧪</button>
+    </header>
+
+    <div id="messages" class="messages" aria-live="polite">
+      <div class="welcome" id="welcome">
+        <h1>本地大模型聊天机器人</h1>
+        <p>全部推理在本机完成。支持文字与语音输入、甜美语音朗读、跨会话长期记忆。</p>
+        <ul class="hints">
+          <li><kbd>Enter</kbd> 发送，<kbd>Shift</kbd>+<kbd>Enter</kbd> 换行</li>
+          <li>按住 <kbd>空格</kbd> 或 🎤 按钮说话</li>
+          <li>左侧「记忆」可查看并纠正它记住的每一条内容</li>
+        </ul>
+      </div>
+    </div>
+
+    <div id="status-bar" class="status-bar"></div>
+
+    <footer id="composer">
+      <div class="composer-inner">
+        <textarea id="input" rows="1" placeholder="说点什么…（Enter 发送 / 空格 说话）" autocomplete="off"></textarea>
+        <button class="mic-btn" id="btn-mic" title="按住说话（或按住空格）">🎤</button>
+        <button class="send-btn" id="btn-send" title="发送">发送</button>
+      </div>
+      <div class="recording-hint" id="recording-hint" hidden>
+        <span class="pulse"></span> 正在录音… 松开结束
+      </div>
+    </footer>
+  </main>
+</div>
+
+<!-- 人设编辑弹窗 -->
+<div class="modal" id="modal-persona" hidden>
+  <div class="modal-card">
+    <h2 id="persona-modal-title">编辑人设</h2>
+    <label>ID（英文/数字，创建后不建议修改）<input id="pf-id" type="text" placeholder="my_persona"></label>
+    <label>名称<input id="pf-name" type="text" placeholder="温柔姐姐"></label>
+    <label>头像 emoji<input id="pf-avatar" type="text" maxlength="4" placeholder="🌷"></label>
+    <label>简介<input id="pf-desc" type="text" placeholder="一句话说明这个角色的定位"></label>
+    <label>开场白<input id="pf-greeting" type="text" placeholder="首次进入会话时说的话"></label>
+    <label>系统提示词（决定性格与说话方式）
+      <textarea id="pf-prompt" rows="8"></textarea>
+    </label>
+    <div class="grid2">
+      <label>温度 temperature<input id="pf-temp" type="number" step="0.05" min="0" max="2" value="0.7"></label>
+      <label>top_p<input id="pf-topp" type="number" step="0.05" min="0" max="1" value="0.9"></label>
+      <label>最大回复 tokens<input id="pf-maxtok" type="number" min="1" max="8192" value="600"></label>
+      <label>语音后端
+        <select id="pf-backend">
+          <option value="">自动（按优先级）</option>
+          <option value="edge">edge（在线音色）</option>
+          <option value="indextts">indextts（本地克隆）</option>
+          <option value="openai">openai 兼容服务</option>
+          <option value="sapi">Windows SAPI</option>
+        </select>
+      </label>
+      <label>音色 voice_id<input id="pf-voice" type="text" placeholder="zh-CN-XiaoxiaoNeural"></label>
+      <label>情感
+        <select id="pf-emotion">
+          <option value="sweet">sweet 甜美</option>
+          <option value="cheerful">cheerful 活泼</option>
+          <option value="gentle">gentle 温柔</option>
+          <option value="calm">calm 平静</option>
+          <option value="serious">serious 严肃</option>
+          <option value="shy">shy 害羞</option>
+          <option value="sad">sad 低落</option>
+          <option value="neutral">neutral 中性</option>
+        </select>
+      </label>
+      <label>情感强度<input id="pf-alpha" type="number" step="0.05" min="0" max="1" value="0.85"></label>
+      <label>语速<input id="pf-speed" type="number" step="0.02" min="0.5" max="2" value="1.0"></label>
+      <label>音高（半音）<input id="pf-pitch" type="number" step="0.5" min="-6" max="6" value="0"></label>
+    </div>
+    <label>参考音频（IndexTTS2 克隆用，相对项目根目录）
+      <input id="pf-ref" type="text" placeholder="models/voices/my_voice.wav">
+    </label>
+    <div class="modal-actions">
+      <button class="ghost-btn" data-action="persona-delete" id="pf-delete">删除</button>
+      <div class="spacer"></div>
+      <button class="ghost-btn" data-action="persona-cancel">取消</button>
+      <button class="primary-btn" data-action="persona-save">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 记忆编辑弹窗 -->
+<div class="modal" id="modal-memory" hidden>
+  <div class="modal-card">
+    <h2>编辑记忆</h2>
+    <label>内容<textarea id="mm-content" rows="4"></textarea></label>
+    <div class="grid2">
+      <label>重要度<input id="mm-importance" type="number" step="0.05" min="0" max="1"></label>
+      <label>置信度<input id="mm-confidence" type="number" step="0.05" min="0" max="1"></label>
+    </div>
+    <label>标签（逗号分隔）<input id="mm-tags" type="text"></label>
+    <div class="modal-actions">
+      <button class="ghost-btn" data-action="memory-forget">彻底删除</button>
+      <div class="spacer"></div>
+      <button class="ghost-btn" data-action="memory-cancel">取消</button>
+      <button class="primary-btn" data-action="memory-save">保存</button>
+    </div>
+  </div>
+</div>
+
+<audio id="player" hidden></audio>
+<script src="/assets/app.js"></script>
+</body>
+</html>

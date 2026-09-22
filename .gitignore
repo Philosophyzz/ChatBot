@@ -1,0 +1,66 @@
+# =============================================================================
+# 这个仓库只放**代码、脚本与文档**。
+#
+# 不上传的三类东西：
+#   1) 模型与权重 —— models/ 有 33.6GB（GGUF / whisper / IndexTTS2 / 音色样本），
+#      而且它们都能用 scripts\download-models.ps1 之类重新下载；
+#   2) 第三方大件与构建产物 —— vendor/ 5.8GB、bin/ 0.7GB、venvs/、build/、dist/；
+#   3) **你本人的数据 —— data/ 里是真实的对话与记忆库（memory.sqlite3 + 备份），
+#      logs/ 是运行日志。这些一旦推上去就撤不干净了。**
+#
+# 规则与理由的完整说明见 docs/上传GitHub.md；对应的守卫测试在
+# tests/test_repo_hygiene.py（删掉关键几行会直接测试失败）。
+# =============================================================================
+
+# --- 模型与权重（可重新下载，占 33.6GB）-------------------------------------
+models/
+*.gguf
+*.safetensors
+*.pth
+*.ckpt
+*.onnx
+*.npz
+*.part
+*.download
+
+# --- 第三方源码与预训练权重（vendor/ 5.8GB；用 install 脚本重新拉取）--------
+vendor/
+
+# --- 推理引擎二进制（bin/ 0.7GB：llama.cpp 的 Windows CUDA 构建）-------------
+bin/
+
+# --- Python 环境与缓存 -------------------------------------------------------
+venvs/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# --- 构建产物（PyInstaller 的 build/ 与 dist/，含 82MB 的桌宠 exe）-----------
+build/
+dist/
+
+# --- 运行期数据：**你的对话与记忆，绝对不要上传** ----------------------------
+data/
+logs/
+*.log
+*.jsonl
+
+# --- 本机配置：可能含私人路径或密钥（仓库里保留 local.yaml.example）---------
+config/local.yaml
+.env
+.env.*
+*.token
+
+# --- 智能体协作工具的本地状态 ------------------------------------------------
+.agent-teams/
+
+# --- 编辑器与系统杂物 --------------------------------------------------------
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
