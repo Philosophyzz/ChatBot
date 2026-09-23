@@ -87,6 +87,11 @@ $pyiArgs = @(
     '--hidden-import', 'pet.hands_free',
     '--hidden-import', 'pet.skin',
     '--hidden-import', 'pet.settings',
+    # 录音和播放在函数里延迟导入，必须显式打进桌宠。
+    '--hidden-import', 'sounddevice',
+    '--hidden-import', 'soundfile',
+    '--hidden-import', 'xml.etree.ElementTree',
+    '--add-data', ((Join-Path $ProjectRoot 'src\pet\assets') + ';pet/assets'),
     # 不要用 --collect-submodules PySide6：它会把 Qt3D / WebEngine / Charts 等
     # 几百 MB 一起塞进包里（实测 268MB）。PyInstaller 自带的 PySide6 钩子已经会带上
     # 真正 import 到的模块与平台插件，配合下面的 --exclude 才能压到 60~90MB。
@@ -113,7 +118,7 @@ $heavyExcludes = @(
     'faster_whisper', 'ctranslate2', 'tokenizers', 'sentencepiece', 'onnxruntime',
     'modelscope', 'datasets', 'oss2', 'aliyunsdkcore', 'huggingface_hub', 'safetensors',
     'cv2', 'numba', 'llvmlite', 'scipy', 'sklearn', 'pandas', 'pyarrow',
-    'librosa', 'soundfile', 'audioread', 'av', 'pydub',
+    'librosa', 'audioread', 'av', 'pydub',
     'indextts', 'pytorch_lightning', 'tensorboard', 'wandb',
     'sympy', 'networkx'
 )
@@ -191,12 +196,13 @@ if (-not $OneDir -and $mb -gt $limitMb) {
 $report = Join-Path $ProjectRoot 'logs\pet-build-selftest.txt'
 $smokePng = Join-Path $ProjectRoot 'logs\pet-build.png'
 $importReport = Join-Path $ProjectRoot 'logs\pet-build-imports.txt'
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $report) | Out-Null
 
 # 第一步：运行时依赖能不能导入。这一步抓的是"缺 DLL"这类只在冻结环境里才暴露的问题
 # （ffi-8.dll 就漏过一次，用户双击后只看到"桌宠启动失败"）。
 if (Test-Path -LiteralPath $importReport) { Remove-Item -LiteralPath $importReport -Force }
 Write-Step '冒烟测试 1/2：导入检查（运行时依赖是否齐全）'
-$proc = Start-Process -FilePath $exe -ArgumentList '--import-check', '--report', $importReport -PassThru
+$proc = Start-Process -FilePath $exe -ArgumentList '--import-check', '--report', $importReport -WindowStyle Hidden -PassThru
 if (-not $proc.WaitForExit(120000)) {
     Write-Err2 '导入检查超时 —— exe 可能弹了模态错误框'
     Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
@@ -223,7 +229,7 @@ Write-Step '冒烟测试 2/2：启动 exe（渲染一帧 + 走一遍后端链路
 # 不加 --offscreen：打包好的 exe 不一定带 Qt 的 offscreen 插件，而自检本身不会 show()
 # 任何窗口，用原生平台插件即可（顺便验证 windows 平台插件真的被打进去了）。
 $smokeTimeoutSec = 180
-$proc = Start-Process -FilePath $exe -ArgumentList '--screenshot', $smokePng, '--report', $report -PassThru
+$proc = Start-Process -FilePath $exe -ArgumentList '--screenshot', $smokePng, '--report', $report -WindowStyle Hidden -PassThru
 if (-not $proc.WaitForExit($smokeTimeoutSec * 1000)) {
     Write-Err2 "exe 在 $smokeTimeoutSec 秒内没退出 —— 多半是启动失败后弹了模态错误框"
     Write-Host '  读一下框里的文字：' -ForegroundColor Yellow
@@ -240,7 +246,7 @@ if (-not (Test-Path -LiteralPath $report)) {
 }
 $reportText = Get-Content -LiteralPath $report -Raw -Encoding UTF8
 $pass = ($reportText -match 'PET SELFTEST PASS')
-$offscreenFail = ($reportText -match '\[FAIL\] 角色渲染')
+$offscreenFail = ($reportText -match '\[FAIL\] (角色渲染|内置形象)')
 if ($offscreenFail) {
     Write-Err2 'exe 起来了，但离屏渲染失败（Qt 平台插件或绘制依赖缺失）'
     Write-Host $reportText

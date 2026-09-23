@@ -68,6 +68,7 @@ IMPORT_CHECK_MODULES = (
     "tarfile", "zipfile", "wave", "re", "secrets", "platform",
     "httpx", "httpcore", "certifi", "anyio", "h11", "idna",
     "PySide6.QtCore", "PySide6.QtGui", "PySide6.QtWidgets",
+    "sounddevice", "soundfile",
     "core.logging", "pet.window", "pet.client", "pet.audio", "pet.single_instance",
 )
 
@@ -184,6 +185,36 @@ def run_selftest(args: argparse.Namespace) -> int:
 
     if args.screenshot:
         print(f"  截图：{args.screenshot}")
+
+    # Exercise assets from the actual runtime package, including PyInstaller's bundle.
+    # Do not persist a skin selection during build checks.
+    from pet.skin import BUILTIN_SKINS, builtin_skin_path
+
+    original_pixmap = window.skin_pixmap
+    window.hands_free = False
+    for skin_id, label in BUILTIN_SKINS:
+        path = builtin_skin_path(skin_id)
+        sprite = QPixmap(str(path)) if path else QPixmap()
+        available = not sprite.isNull() and sprite.hasAlphaChannel()
+        check(f"内置形象（{label}）", available)
+        if not available:
+            continue
+        window.skin_pixmap = sprite
+        window.state = "idle"
+        frame = QPixmap(PET_SIZE, PET_SIZE)
+        frame.fill(0)
+        window.render(frame)
+        image = frame.toImage()
+        painted = sum(
+            image.pixelColor(x, y).alpha() > 8
+            for y in range(0, PET_SIZE - 50, 4)
+            for x in range(0, PET_SIZE, 4)
+        )
+        check(f"内置形象渲染（{label}）", painted > 100, f"{painted} 个采样点有内容")
+        if args.screenshot:
+            target = Path(args.screenshot)
+            frame.save(str(target.with_name(f"{target.stem}-{skin_id}.png")))
+    window.skin_pixmap = original_pixmap
 
     if args.chat:
         try:

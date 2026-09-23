@@ -105,6 +105,11 @@ class PetSettings:
         candidate = skins.get(persona_id) or self.values.get("default_skin")
         if not candidate:
             return None
+        if str(candidate).startswith("builtin:"):
+            from pet.skin import builtin_skin_path
+
+            bundled = builtin_skin_path(str(candidate).removeprefix("builtin:"))
+            return str(bundled) if bundled else None
         path = Path(candidate)
         if not path.is_absolute():
             root = project_root()

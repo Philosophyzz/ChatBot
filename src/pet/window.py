@@ -5,8 +5,8 @@ Design notes, because a desktop pet fails in ways a normal window does not:
 * **Frameless + translucent + always-on-top**, dragged by the body. It must never steal
   focus while the user is typing elsewhere, so it is created with ``Qt.Tool`` and
   ``WindowDoesNotAcceptFocus``; only clicking it (or opening the input box) focuses it.
-* **The character is drawn, not loaded.** No art assets to ship, no licensing question,
-  and it scales to any DPI. Personas tint it, so switching persona visibly switches pet.
+* **Bundled anime sprites or custom images**, with a drawn fallback. Images are cached
+  when the skin changes; animation uses painter transforms instead of re-decoding files.
 * **Every network call runs on a worker thread** and reports back through Qt signals. A
   blocking ``httpx`` call inside ``paintEvent``/a slot freezes the whole pet — including
   its animation — and looks like a crash.
@@ -22,7 +22,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 from PySide6.QtCore import QPoint, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QBrush, QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import QAction, QBrush, QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap, QRadialGradient
 from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
@@ -310,6 +310,9 @@ class PetWindow(QWidget):
         self.listener.set_sensitivity(self.sensitivity)
         self._phase = 0.0
         self._blink = 0.0
+        self._hovered = False
+        self._hover_amount = 0.0
+        self._affection = 0.0
         self._press_pos: Optional[QPoint] = None
         self._press_moved = False
         self._recording = False
@@ -338,6 +341,7 @@ class PetWindow(QWidget):
         self.tray: Optional[QSystemTrayIcon] = None
         if with_tray:
             self._build_tray()
+        self._load_skin()
         self._place_bottom_right()
         self.refresh_personas()
         self.refresh_models()
@@ -419,6 +423,8 @@ class PetWindow(QWidget):
         self.tray.show()
 
     def _icon(self) -> QIcon:
+        if self.skin_pixmap is not None:
+            return QIcon(self.skin_pixmap)
         pixmap = QPixmap(PET_SIZE, PET_SIZE)
         pixmap.fill(Qt.transparent)
         painter = QPainter(pixmap)
@@ -426,6 +432,14 @@ class PetWindow(QWidget):
         self._draw_character(painter, QRectF(0, 0, PET_SIZE, PET_SIZE), mood="idle")
         painter.end()
         return QIcon(pixmap)
+
+    def _refresh_tray_appearance(self) -> None:
+        if self.tray is not None:
+            self.tray.setIcon(self._icon())
+            previous = self.tray.contextMenu()
+            self.tray.setContextMenu(self._menu())
+            if previous is not None:
+                previous.deleteLater()
 
     # -- state -------------------------------------------------------------------------
     def _set_state(self, state: str) -> None:
@@ -501,19 +515,32 @@ class PetWindow(QWidget):
         self.skin_path = path
         self.skin_pixmap = None
         if not path:
+            self._refresh_tray_appearance()
             self.update()
             return
         pixmap = QPixmap(path)
         if pixmap.isNull():
             log.warning("pet skin could not be loaded", extra={"path": path})
             self.skin_path = None
+            self._refresh_tray_appearance()
             self.update()
             return
-        self.skin_pixmap = pixmap
+        self.skin_pixmap = pixmap.scaled(512, 512, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         # The tray icon should look like the character the user actually sees.
-        if self.tray is not None:
-            self.tray.setIcon(self._icon())
+        self._refresh_tray_appearance()
         log.info("pet skin applied", extra={"persona": self.persona_id, "path": path})
+
+    def choose_builtin_skin(self, skin_id: str) -> None:
+        from pet.skin import BUILTIN_SKINS, builtin_skin_path
+
+        if builtin_skin_path(skin_id) is None:
+            self.bubble.show_text("这款内置形象暂时不可用", autohide_s=4)
+            return
+        self.settings.set_skin(self.persona_id, f"builtin:{skin_id}")
+        self._load_skin(force=True)
+        self._affection = 1.0
+        self.update()
+        self.bubble.show_text(f"{dict(BUILTIN_SKINS)[skin_id]}来陪你啦～", autohide_s=4)
 
     def set_skin(self, image_path: str) -> bool:
         """Install ``image_path`` as the current persona's character (tray menu entry)."""
@@ -601,6 +628,8 @@ class PetWindow(QWidget):
     # -- animation ---------------------------------------------------------------------
     def _tick(self) -> None:
         self._phase += 0.06
+        self._hover_amount += (float(self._hovered) - self._hover_amount) * 0.16
+        self._affection = max(0.0, self._affection - 0.025)
         if self.state == "thinking":
             self._phase += 0.06
         if self._blink > 0:
@@ -635,39 +664,74 @@ class PetWindow(QWidget):
         if pixmap is None:
             return
         bob = math.sin(self._phase) * (2.5 if self.state != "thinking" else 4.0)
-        target = QRectF(rect).translated(0, bob)
-        # Keep the aspect ratio: a wide image should not be squashed into a square.
-        scaled = pixmap.scaled(
-            int(target.width()),
-            int(target.height()),
-            Qt.KeepAspectRatio,
-            Qt.SmoothTransformation,
-        )
-        x = target.center().x() - scaled.width() / 2
-        y = target.center().y() - scaled.height() / 2
+        # Leave space for the name and mic; reserve a margin for sway and the hop.
+        target = rect.adjusted(12, 8, -12, -38).translated(0, bob)
+        ratio = min(target.width() / pixmap.width(), target.height() / pixmap.height())
+        width, height = pixmap.width() * ratio, pixmap.height() * ratio
+        x = target.center().x() - width / 2
+        y = target.center().y() - height / 2
+        glow = QColor(self.accent)
+        glow.setAlpha(0)
         if self.state == "speaking":
             pulse = 0.5 + 0.5 * math.sin(self._phase * 3.2)
-            glow = QColor(self.accent)
             glow.setAlpha(int(60 + 90 * pulse))
-            painter.setBrush(QBrush(glow))
-            painter.setPen(Qt.NoPen)
-            painter.drawEllipse(QRectF(x, y, scaled.width(), scaled.height()).adjusted(-6, -6, 6, 6))
         elif self.state in {"listening", "thinking"}:
-            glow = QColor(self.accent)
             glow.setAlpha(110 if self.state == "listening" else 70)
-            painter.setBrush(QBrush(glow))
+        if glow.alpha():
+            gradient = QRadialGradient(target.center(), max(width, height) * 0.58)
+            gradient.setColorAt(0, glow)
+            gradient.setColorAt(0.65, glow)
+            gradient.setColorAt(1, QColor(glow.red(), glow.green(), glow.blue(), 0))
+            painter.setBrush(QBrush(gradient))
             painter.setPen(Qt.NoPen)
-            painter.drawEllipse(QRectF(x, y, scaled.width(), scaled.height()).adjusted(-5, -5, 5, 5))
-        painter.drawPixmap(int(x), int(y), scaled)
+            painter.drawEllipse(QRectF(x, y, width, height).adjusted(-8, -8, 8, 8))
+        painter.save()
+        hop = math.sin((1.0 - self._affection) * math.pi) * 7 * self._affection
+        painter.translate(target.center().x(), target.bottom() - hop)
+        sway = math.sin(self._phase * 0.7) * 1.8 - self._hover_amount * 3
+        if self.state == "speaking":
+            sway += math.sin(self._phase * 3.2) * 1.5
+        painter.rotate(sway)
+        breath = 1 + math.sin(self._phase) * 0.008
+        painter.scale(1 + self._hover_amount * 0.025, breath)
+        painter.drawPixmap(QRectF(-width / 2, -height, width, height), pixmap, QRectF(pixmap.rect()))
+        painter.restore()
+
+        # Draw hearts as paths so the effect also works without an emoji font.
+        if self._affection > 0:
+            painter.save()
+            painter.setPen(Qt.NoPen)
+            for index in range(3):
+                painter.save()
+                painter.setOpacity(self._affection * 0.9)
+                painter.translate(
+                    target.center().x() + (index - 1) * 32,
+                    target.top() + 24 + index % 2 * 12 - (1 - self._affection) * 24,
+                )
+                heart = QPainterPath()
+                heart.moveTo(0, 3)
+                heart.cubicTo(-12, -4, -6, -12, 0, -6)
+                heart.cubicTo(6, -12, 12, -4, 0, 3)
+                painter.setBrush(QColor("#ff8fb1"))
+                painter.drawPath(heart)
+                painter.restore()
+            painter.restore()
 
         # Name tag, same place as the drawn character's.
-        painter.setPen(QPen(QColor(235, 238, 250, 235)))
         font = QFont("Microsoft YaHei UI")
         font.setPointSizeF(9.5)
         painter.setFont(font)
-        painter.drawText(QRectF(0, rect.bottom() - 26, rect.width(), 18), Qt.AlignCenter, self.persona_name)
+        label = painter.fontMetrics().elidedText(self.persona_name, Qt.ElideRight, int(rect.width() - 30))
+        tag_width = painter.fontMetrics().horizontalAdvance(label) + 16
+        tag = QRectF(rect.center().x() - tag_width / 2, rect.bottom() - 29, tag_width, 18)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(30, 33, 45, 190))
+        painter.drawRoundedRect(tag, 9, 9)
+        painter.setPen(QColor(245, 243, 250))
+        painter.drawText(tag, Qt.AlignCenter, label)
 
         if self.state == "thinking":
+            painter.setPen(Qt.NoPen)
             painter.setBrush(QBrush(QColor(235, 238, 250, 200)))
             for index in range(3):
                 offset = (self._phase * 2 + index * 0.6) % 3
@@ -794,6 +858,14 @@ class PetWindow(QWidget):
         painter.drawLine(center.x(), center.y() + 8, center.x(), center.y() + 11)
 
     # -- interaction -------------------------------------------------------------------
+    def enterEvent(self, event) -> None:  # noqa: N802
+        self._hovered = True
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        self._hovered = False
+        super().leaveEvent(event)
+
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.LeftButton:
             self._press_pos = event.position().toPoint()
@@ -818,6 +890,7 @@ class PetWindow(QWidget):
             if self._recording:
                 self.stop_recording_and_send()
             elif not self._press_moved:
+                self._affection = 1.0
                 self.bubble.ask()
             self._press_pos = None
         super().mouseReleaseEvent(event)
@@ -1111,6 +1184,17 @@ class PetWindow(QWidget):
 
         # -- 形象 --
         look_menu = menu.addMenu("更换形象")
+        from pet.skin import BUILTIN_SKINS, builtin_skin_path
+
+        for skin_id, label in BUILTIN_SKINS:
+            path = builtin_skin_path(skin_id)
+            action = QAction(QIcon(str(path)) if path else QIcon(), label, look_menu)
+            action.setEnabled(path is not None)
+            action.setCheckable(True)
+            action.setChecked(path is not None and str(path) == self.skin_path)
+            action.triggered.connect(lambda checked=False, key=skin_id: self.choose_builtin_skin(key))
+            look_menu.addAction(action)
+        look_menu.addSeparator()
         pick = QAction("选一张图片…", look_menu)
         pick.triggered.connect(self.choose_skin_file)
         look_menu.addAction(pick)

@@ -26,6 +26,21 @@ SUPPORTED_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", 
 #: Rendered size of the character area is ~200 px, so 512 keeps it crisp on high-DPI screens.
 DEFAULT_SIZE = 512
 
+# Lives inside the package so PyInstaller and source runs use the same assets.
+BUILTIN_SKINS = (
+    ("sakura_cat", "樱樱 · 猫耳团子"),
+    ("mint_bunny", "薄荷 · 软软兔"),
+    ("luna_witch", "露娜 · 星星魔女"),
+)
+
+
+def builtin_skin_path(skin_id: str) -> Optional[Path]:
+    """Resolve only known bundled sprites; never interpret the id as a user path."""
+    if skin_id not in {key for key, _ in BUILTIN_SKINS}:
+        return None
+    path = Path(__file__).resolve().parent / "assets" / f"{skin_id}.png"
+    return path if path.is_file() else None
+
 
 class SkinError(RuntimeError):
     """Readable failure (bad file, unsupported format, no Qt) for the UI to show."""
@@ -132,9 +147,12 @@ def clear_skin(persona_id: Optional[str] = None, *, settings: Optional[PetSettin
     """Forget this persona's custom image (and delete the file)."""
     store = settings or get_settings()
     removed: List[Path] = []
-    path = store.skin_for(persona_id)
+    # Clearing an inherited skin must not delete the global skin's shared file.
+    stored = (store.get("skins") or {}).get(persona_id) if persona_id else store.get("default_skin")
+    path = store.skin_for(persona_id) if stored else None
     store.set_skin(persona_id, None)
-    if path:
+    remaining = [store.get("default_skin"), *(store.get("skins") or {}).values()]
+    if path and not str(stored).startswith("builtin:") and stored not in remaining:
         try:
             Path(path).unlink()
             removed.append(Path(path))
