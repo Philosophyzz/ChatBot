@@ -122,6 +122,7 @@ def run_selftest(args: argparse.Namespace) -> int:
         # Only on request: the frozen exe may not bundle Qt's offscreen plugin, and the
         # selftest never calls show(), so the native platform is fine (and quieter).
         os.environ["QT_QPA_PLATFORM"] = "offscreen"
+    from PySide6.QtCore import Qt
     from PySide6.QtGui import QPixmap
     from PySide6.QtWidgets import QApplication
 
@@ -162,7 +163,7 @@ def run_selftest(args: argparse.Namespace) -> int:
         window.state = mood
         window.hands_free = mood == "listening"
         pixmap = QPixmap(PET_SIZE, PET_SIZE)
-        pixmap.fill(0)
+        pixmap.fill(Qt.transparent)
         window.render(pixmap)
         image = pixmap.toImage()
         painted = sum(
@@ -202,7 +203,7 @@ def run_selftest(args: argparse.Namespace) -> int:
         window.skin_pixmap = sprite
         window.state = "idle"
         frame = QPixmap(PET_SIZE, PET_SIZE)
-        frame.fill(0)
+        frame.fill(Qt.transparent)
         window.render(frame)
         image = frame.toImage()
         painted = sum(
