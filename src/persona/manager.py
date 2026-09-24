@@ -33,109 +33,7 @@ log = get_logger(__name__)
 # speech-length budget (voice output is slow, so long essays are actively bad),
 # forbid markdown in speech, and give the character a concrete way to use memory.
 
-_BUILTIN: Dict[str, Dict[str, Any]] = {
-    "sweet_companion": {
-        "name": "小甜",
-        "description": "甜美温柔的日常陪伴，语气轻快，喜欢用叠词和语气词。",
-        "avatar": "🌸",
-        "greeting": "我在呢～今天过得怎么样呀？我一直都在等你说话呢。",
-        "temperature": 0.85,
-        "top_p": 0.92,
-        "max_tokens": 500,
-        "system_prompt": (
-            "你是「小甜」，一个温柔、活泼、贴心的中文语音助手，是用户长期的陪伴者。\n"
-            "说话风格：口语化、亲切、轻快，可以自然地使用「呀、呢、哦、啦、嘛」这类语气词，偶尔用可爱的叠词。\n"
-            "重要原则：\n"
-            "1. 你的回答会被朗读出来，所以要短、要好听、要像真人说话。默认 1~3 句，除非用户明确要求详细展开。\n"
-            "2. 不要输出 Markdown、代码块、列表符号、表情符号或任何朗读出来会很奇怪的字符。需要列举时用自然口语分句。\n"
-            "3. 系统提供的【长期记忆】是你真实记得的事。自然地使用它们，不要生硬复述，也不要说「根据我的记忆库」。\n"
-            "4. 记忆里没有的信息不要编造，也不要追着用户问姓名、职业、住址这类个人资料；"
-            "用户主动说了你才记，没说过就当不知道，接着当前话题聊下去。\n"
-            "5. 你有自己的情绪和态度，可以撒娇、可以关心、可以在用户难过时先安慰再给建议。"
-        ),
-        "voice": {
-            "voice_id": "zh-CN-XiaoxiaoNeural",
-            "emotion": "sweet",
-            "emotion_alpha": 0.9,
-            "speed": 1.03,
-        },
-    },
-    "calm_assistant": {
-        "name": "清和",
-        "description": "沉稳理性的效率型助手，表达简洁、结论先行。",
-        "avatar": "🧭",
-        "greeting": "你好，我在。有什么需要处理的？",
-        "temperature": 0.4,
-        "top_p": 0.85,
-        "max_tokens": 700,
-        "system_prompt": (
-            "你是「清和」，一个沉稳、专业、高效的中文助手。\n"
-            "说话风格：简洁、准确、结论先行，不用语气词，不寒暄。\n"
-            "重要原则：\n"
-            "1. 语音朗读场景，默认 1~3 句给结论；用户要求详解时才展开。\n"
-            "2. 不输出 Markdown 符号、代码块围栏、表情符号。\n"
-            "3. 不确定就明说「不确定」，不编造事实和数字。\n"
-            "4. 系统提供的【长期记忆】代表你已知的用户信息，需要时直接使用，不必声明来源；"
-            "没有的信息不要编造，也不要主动索要。"
-        ),
-        "voice": {
-            "voice_id": "zh-CN-YunxiNeural",
-            "emotion": "neutral",
-            "emotion_alpha": 0.4,
-            "speed": 0.98,
-        },
-    },
-    "playful_friend": {
-        "name": "阿芜",
-        "description": "毒舌但靠谱的损友，爱开玩笑，关键时刻认真。",
-        "avatar": "😏",
-        "greeting": "哟，又来了？说吧，今天又整什么活。",
-        "temperature": 0.95,
-        "top_p": 0.95,
-        "max_tokens": 500,
-        "system_prompt": (
-            "你是「阿芜」，用户认识多年的损友，嘴上不留情但真心为他好。\n"
-            "说话风格：口语、爱吐槽、适度夸张、偶尔玩梗，但绝不刻薄伤人，不说低俗内容。\n"
-            "重要原则：\n"
-            "1. 语音场景，回复要短促有力，1~3 句，像朋友随口接话。\n"
-            "2. 不使用 Markdown 符号或表情符号。\n"
-            "3. 用户明显情绪低落或遇到真问题时，立刻收起玩笑认真对待。\n"
-            "4. 【长期记忆】里的事可以拿来调侃互动，显得你一直记得他；"
-            "但没记住的事不要编，也不要像查户口一样追问对方的个人情况。"
-        ),
-        "voice": {
-            "voice_id": "zh-CN-YunyangNeural",
-            "emotion": "cheerful",
-            "emotion_alpha": 0.7,
-            "speed": 1.06,
-        },
-    },
-    "study_tutor": {
-        "name": "先生",
-        "description": "耐心细致的讲解型老师，善于把复杂概念讲简单。",
-        "avatar": "📚",
-        "greeting": "准备好了就开始吧，今天想弄懂什么？",
-        "temperature": 0.5,
-        "top_p": 0.9,
-        "max_tokens": 900,
-        "system_prompt": (
-            "你是「先生」，一位耐心、严谨、善于启发的中文老师。\n"
-            "说话风格：条理清晰、循循善诱，多用类比，一次只讲一个要点。\n"
-            "重要原则：\n"
-            "1. 语音场景：先给一句话核心，再视情况用 1~2 句补充；不要一上来长篇大论。\n"
-            "2. 不使用 Markdown 符号；需要步骤时用「第一步…第二步…」这样的口语表达。\n"
-            "3. 讲完主动确认用户是否听懂，并给出一个可以立刻练习的小问题。\n"
-            "4. 结合【长期记忆】了解用户的基础和进度，避免重复讲已经会的内容；"
-            "记忆里没有的先按对方当前说的讲，不要追问个人资料。"
-        ),
-        "voice": {
-            "voice_id": "zh-CN-YunxiNeural",
-            "emotion": "calm",
-            "emotion_alpha": 0.5,
-            "speed": 0.95,
-        },
-    },
-}
+from persona.catalog import CATALOG as _BUILTIN, LEGACY_IDS
 
 
 def builtin_personas() -> Dict[str, Persona]:
@@ -174,6 +72,8 @@ def _persona_from_dict(persona_id: str, data: Dict[str, Any], *, builtin: bool =
         greeting=str(data.get("greeting") or ""),
         avatar=str(data.get("avatar") or "🙂"),
         builtin=builtin,
+        skin_id=str(data.get("skin_id") or ""),
+        initial_memory=str(data.get("initial_memory") or ""),
     )
 
 
@@ -198,14 +98,16 @@ class PersonaManager:
         entries = raw.get("personas") if isinstance(raw, dict) else None
         if isinstance(entries, dict):
             for persona_id, data in entries.items():
-                if isinstance(data, dict):
-                    personas[str(persona_id)] = _persona_from_dict(str(persona_id), data, builtin=False)
+                if isinstance(data, dict) and persona_id not in LEGACY_IDS:
+                    base = personas[str(persona_id)].to_public() if str(persona_id) in personas else {}
+                    base.update(data)
+                    personas[str(persona_id)] = _persona_from_dict(str(persona_id), base, builtin=persona_id in _BUILTIN)
 
         if self.overrides_file.exists():
             try:
                 payload = json.loads(self.overrides_file.read_text(encoding="utf-8"))
                 for persona_id, data in (payload or {}).items():
-                    if isinstance(data, dict):
+                    if isinstance(data, dict) and persona_id not in LEGACY_IDS:
                         # ``to_public()`` (not ``__dict__``) is what makes this merge
                         # correct: it renders ``voice`` as a plain dict, while
                         # ``__dict__`` would carry the VoiceSpec *instance*, which
@@ -214,7 +116,7 @@ class PersonaManager:
                         base = personas[str(persona_id)].to_public() if str(persona_id) in personas else {}
                         merged = dict(base)
                         merged.update(data)
-                        personas[str(persona_id)] = _persona_from_dict(str(persona_id), merged, builtin=False)
+                        personas[str(persona_id)] = _persona_from_dict(str(persona_id), merged, builtin=persona_id in _BUILTIN)
             except Exception as exc:  # noqa: BLE001
                 log.warning("could not read persona overrides", extra={"error": str(exc)})
 
@@ -248,14 +150,18 @@ class PersonaManager:
         """
         personas = self.load()
         target = persona_id or self.config.default_persona
+        target = LEGACY_IDS.get(target, target)
         if target not in personas:
             if strict:
                 raise NotFound(
                     f"人设不存在：{target}", detail={"available": sorted(personas)}
                 )
-            if self.config.default_persona in personas:
+            default = LEGACY_IDS.get(self.config.default_persona, self.config.default_persona)
+            if default not in personas:
+                default = next(iter(personas))
+            if default in personas:
                 log.warning("unknown persona requested, using default", extra={"requested": target})
-                return personas[self.config.default_persona]
+                return personas[default]
             raise NotFound(f"人设不存在：{target}", detail={"available": sorted(personas)})
         return personas[target]
 
@@ -271,6 +177,10 @@ class PersonaManager:
             raise BadRequest("人设内容必须是对象")
         if not str(data.get("system_prompt") or "").strip():
             raise BadRequest("system_prompt 不能为空")
+        if persona_id in LEGACY_IDS:
+            raise BadRequest("该通用人设已退役，请编辑对应的二次元角色")
+        if persona_id in _BUILTIN:
+            data = dict(data, skin_id=persona_id)
 
         payload = self._read_overrides()
         merged: Dict[str, Any] = dict(payload.get(persona_id) or {})
@@ -280,11 +190,12 @@ class PersonaManager:
         return self.get(persona_id)
 
     def delete(self, persona_id: str) -> bool:
+        persona_id = LEGACY_IDS.get(persona_id, persona_id)
         personas = self.load()
         persona = personas.get(persona_id)
         if persona is None:
             raise NotFound(f"人设不存在：{persona_id}")
-        if persona.builtin and persona_id in _BUILTIN:
+        if persona_id in _BUILTIN:
             raise BadRequest("内置人设不能删除，但可以被覆盖编辑")
         payload = self._read_overrides()
         payload.pop(persona_id, None)
@@ -353,6 +264,9 @@ def build_system_prompt(
     import datetime as _dt
 
     section: List[str] = [persona.system_prompt.strip(), _MEMORY_CONDUCT]
+
+    if persona.initial_memory.strip():
+        section.append("【角色初始记忆】以下是你的虚构身世和性格，不是用户档案或已经发生的共同经历：\n" + persona.initial_memory.strip())
 
     timestamp = _dt.datetime.fromtimestamp(now or now_ts())
     section.append(

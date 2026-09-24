@@ -1,8 +1,11 @@
 # 本地 LLM 聊天机器人
 
-一个完全跑在你自己机器上的中文语音聊天助手：本地大模型对话、跨会话长期记忆、语音输入、
-甜美语音朗读、可切换人设。硬件按 **RTX 5080 16GB + 31GB 内存** 调优，所有模型权重都放在
-项目目录（D 盘）。
+> 无语音 ASMR：桌宠右键可播放纸张、刷拭、轻敲，支持定时、暂停、音量和左右声像；AudioX 训练与生成流程见 [完整方案](docs/ASMR生成与训练方案.md)。
+
+> 2026-09-24：新增已启用的 Live2D 示例角色、常态/电影/音乐场景和本机主动感知。vLLM 迁移已接入，WSL2 组件需要重启后继续安装；当前推理服务仍如实显示原后端。见 [部署状态与使用说明](docs/vLLM与主动陪伴.md)。
+一个以二次元桌宠为入口的中文语音聊天伙伴：支持本地模型或外部 API、跨会话长期记忆、
+语音输入、角色神经音色与可切换人设。硬件按 **RTX 5080 16GB + 31GB 内存** 调优，所有模型权重都放在
+`D:\Models`。
 
 ```
 你说话 🎤 → Whisper 识别 → 混合检索长期记忆 → 本地大模型生成
@@ -13,6 +16,10 @@
 ```
 
 ---
+
+桌宠更新：樱樱（猫耳）、薄荷（兔耳）、露娜（魔女）各自绑定立绘、初始记忆和音色。
+滚轮缩放、轻触分区、长按拥抱、双击聊天；网页仅通过桌宠右键菜单打开。
+详见 [桌宠使用说明](docs/桌宠使用说明.md)。
 
 ## 一、三分钟上手
 
@@ -28,11 +35,11 @@ powershell -ExecutionPolicy Bypass -File scripts\verify.ps1
 # 3) 下载主模型（默认 27B Q4，约 16.5GB；国内加 -Mirror 快很多）
 powershell -ExecutionPolicy Bypass -File scripts\download-models.ps1 -Mirror
 
-# 4) 一键启动（模型服务 + 网页界面 + 自动开浏览器）
-powershell -ExecutionPolicy Bypass -File scripts\start-all.ps1
+# 4) 一键启动桌宠（按配置启动模型服务；网页不会自动打开）
+powershell -ExecutionPolicy Bypass -File scripts\start-pet.ps1
 ```
 
-浏览器会自动打开 <http://127.0.0.1:8077>。首次提问需要等 27B 模型加载完（1~3 分钟）。
+右键桌宠 →「打开网页」才会打开完整界面。首次提问需要等待本地模型加载完成。
 
 想先看界面长什么样、不等下载？用模拟模式：
 
@@ -128,25 +135,28 @@ D:\conda-envs\chatbot\python.exe -m pip install -r requirements.txt -r requireme
 **关键结论：27B 的 Q4 量化权重（约 16.5GB）装不进 12.5GB 可用显存。** 任何声称"16GB 卡跑满血
 27B"的说法都需要靠把层放到内存里——这不是缺陷，而是这个硬件上的物理事实。
 
-### 2.2 三个档位，按你的取舍选
+### 2.2 五个档位，按你的取舍选
 
 配置在 `config/models.json`，切换只需改一个参数，无需改代码。
 **表中每个仓库与文件名都已用 `python tests/verify_models.py` 对 HuggingFace API 实测校验过。**
 
 | 档位 | 模型 | 权重（实测） | GPU 层数 | 上下文 | **实测速度** | 适合 |
 |---|---|---|---|---|---|---|
-| `fast-9b`（**当前默认**） | Qwen3.5-9B Q4_K_M（官方仓库） | **5.29GB** | 全部在 GPU | 32768 | **~125 tok/s，0.25s/轮** | **日常与语音对话** |
-| `quality-27b` | Qwen3.6-27B Q4_K_M（带 MTP 加速头） | **15.66GB** | 44 层在 GPU | 8192 | ~10 tok/s | 质量优先、能等 |
+| `MiMo-V2.6-Distill-Qwen-9B-Q8_0`（**当前默认**） | 小米 MiMo-V2.6 蒸馏版 Q8_0（GGML 官方 GGUF） | **9.53GB + 624MB mmproj** | RTX 5080 全部在 GPU | 8192 | 待实测 | 日常对话；服务已加载多模态投影 |
+| `Qwen3.5-9B-Q4_K_M` | Qwen3.5-9B Q4_K_M（官方仓库） | **5.29GB** | 全部在 GPU | 32768 | **~125 tok/s，0.25s/轮** | 轻快与长上下文对话 |
+| `Qwen3.6-27B-Q4_K_M-mtp` | Qwen3.6-27B Q4_K_M（带 MTP 加速头） | **15.66GB** | 44 层在 GPU | 8192 | ~10 tok/s | 质量优先、能等 |
+| `Qwen3.6-14B-A3B-FableVibes-Q4_K_M` | Qwen3.6-14B-A3B Q4_K_M（社区角色微调） | **7.88GB** | 全部在 GPU | 32768 | 待实测 | 角色对话 |
+| `Qwen3.6-35B-A3B-UD-IQ2_XXS` | Qwen3.6-35B-A3B UD-IQ2_XXS | **10.02GB** | `--n-cpu-moe 8` 后约 9.85GB | 8192 | 5~15 tok/s | 质量优先、较慢 |
 
-**默认档位是 9B，这是实测选出来的**，不是拍脑袋：
+**当前默认是 MiMo-V2.6-Distill-Qwen-9B-Q8_0**，采用 GGML 发布的 llama.cpp 兼容 GGUF，并加载配套视觉投影文件。
 
-- 9B 权重 5.29GB 能**全量放进显存**，每 token 无需跨 PCIe 搬运 → **125 tok/s**
+- MiMo Q8_0 权重约 9.53GB，可在 RTX 5080 16GB 显卡上全量加载；速度待本机持续测量。
 - 27B 权重 15.66GB 装不进 12.5GB 可用显存，实测速度随"留在 CPU 的权重量"线性下降：
   28 层 5.74 tok/s → 40 层 8.25 → 46 层 10.14 → 全量 OOM。**这是数学后果，换任何推理框架都一样**
-- 聊天陪伴场景要的是响应快，所以默认 9B
+- 当前模型已通过服务健康检查和真实 completion 验证。
 
 想切到 27B：改 `config/models.json` 的 `default_tier` 与 `config/config.yaml` 的 `llm.model` 为
-`quality-27b`，然后 `scripts\stop.ps1` + `scripts\start-all.ps1`。
+`Qwen3.6-27B-Q4_K_M-mtp`，然后 `scripts\stop.ps1` + `scripts\start-all.ps1`。
 
 ### 2.3 两个必须知道的调优项（都已写进脚本）
 
@@ -309,14 +319,13 @@ powershell -ExecutionPolicy Bypass -File scripts\start-all.ps1
 ### 3.3 人设
 
 人设不只是提示词，而是**提示词 + 采样参数 + 音色 + 情感 + 记忆作用域**的绑定。切换人设时
-声音和性格一起变。`config/personas.yaml` 里有 7 个预设人设，**默认是「温柔姐姐」**
-（`config.yaml` 的 `default_persona`，改这里就换默认）；自己写的排在列表最前面，
-内置的 4 个（小甜、清和、阿芜、先生）只做兜底，不会悄悄变成默认。
-在界面里可以新建 / 编辑，也可以直接改 `config/personas.yaml`。
+声音和性格一起变。现在只保留樱樱、薄荷、露娜三位二次元预设，**默认是樱樱**。
+完整角色定义位于 `src/persona/catalog.py`，`config/personas.yaml` 和界面可覆盖编辑。
+每位角色都有匹配的立绘与初始记忆，旧通用人设不再显示；旧会话仍然可用。
 
 ### 3.4 桌宠（可执行文件，随时开关）
 
-`dist\ChatBotPet.exe`（约 82MB，PyInstaller 单文件）：无边框、置顶、可拖动的桌宠，
+`启动聊天机器人.exe`（PyInstaller 单文件，自动启动服务和桌宠）：无边框、置顶、可拖动的桌宠，
 会听你说话、用当前人设的音色回答；系统托盘里可随时显示 / 隐藏 / 退出。
 
 | 操作 | 效果 |
@@ -327,14 +336,16 @@ powershell -ExecutionPolicy Bypass -File scripts\start-all.ps1
 | 右键 →「更换形象」 | 内置樱樱（猫耳）、薄荷（兔耳）、露娜（星星魔女），也可导入自己的透明 PNG |
 | 右键 →「底座模型」 | 9B / 14B / 27B / 35B 直接切（见 [docs/模型切换.md](docs/模型切换.md)） |
 | 左键拖动 | 移动位置 |
-| 双击 | 打开完整网页界面 |
-| 单击身体 | 打开打字输入框 |
-| 右键 | 菜单：打字聊天 / 一直听着 / 免提灵敏度 / 静音朗读 / 更换形象 / 底座模型 / 切换人设 / 重新连接 / 隐藏 / 退出 |
+| 双击 | 打开桌面打字输入框 |
+| 单击头部／脸颊／身体 | 对应触摸反馈；长按拥抱 |
+| 滚轮 | 35%～300% 平滑缩放，自动保存 |
+| 右键 →「打开网页」 | 打开完整网页界面 |
+| 右键 | 菜单：打字聊天 / 一直听着 / 免提灵敏度 / 静音朗读 / 更换形象 / 底座模型 / 重新连接 / 隐藏 / 退出 |
 | Ctrl+Space | 按住说话（桌宠有焦点时） |
 
-新增三款二次元 Q 版形象，支持呼吸起伏、轻摆、悬停歪头和点击跳跃飘心；单击仍可打字聊天。
+新增三款二次元 Q 版形象，支持呼吸起伏、轻摆、悬停歪头和点击跳跃飘心；双击打开打字聊天。
 选择按人设保存，托盘图标同步切换。素材和生成提示词见 [桌宠素材说明](src/pet/assets/README.md)。
-从源码启动即可使用；已有 `ChatBotPet.exe` 需运行 `scripts/build-pet.ps1` 重新打包。
+从源码启动即可使用；已有 `启动聊天机器人.exe` 需运行 `scripts/build-pet.ps1` 重新打包。
 
 > **服务没在运行时**，菜单里会**额外**出现一项「本地服务没在运行 → 启动它」；服务健康时
 > 它不显示。最初它是个常驻项，还能对着一个健康的服务再启动一遍 —— 那会把网页那边的连接
@@ -352,7 +363,7 @@ powershell -ExecutionPolicy Bypass -File scripts\start-all.ps1
 * 从源码运行：`powershell -ExecutionPolicy Bypass -File scripts\start-pet.ps1`
 * 重新打包：`powershell -ExecutionPolicy Bypass -File scripts\build-pet.ps1`
   （`-OneDir` 启动更快；`-Console` 出带控制台的调试版）
-* 自检（无需人工看）：`dist\ChatBotPet.exe --selftest --report dist\_pet.txt`
+* 自检（无需人工看）：`启动聊天机器人.exe --selftest --report dist\_pet.txt`
   —— 离屏渲染 5 种状态 + 走一遍 人设 / 对话 / 语音 链路，结果写进报告文件。
 * 麦克风/免提不对劲时：`python tools\check_hands_free.py --calibrate`
   —— 先安静 2 秒、再正常说一句话，它会测出你的说话音量并**推荐该用哪个灵敏度档**；
@@ -382,6 +393,10 @@ powershell -ExecutionPolicy Bypass -File scripts\train-tts.ps1 -Serve
 
 详见 **[docs/训练音色.md](docs/训练音色.md)**：素材要求、参数含义、显存与时间口径、排错表。
 
+> 也可以用**可视化训练页面**（上游 GPT-SoVITS 的 Gradio 界面，本项目已接好）：
+> `powershell -ExecutionPolicy Bypass -File scripts\train-webui.ps1` → http://127.0.0.1:9874
+> 包含切分 / 降噪 / ASR 标注 / 1A 特征提取 / 1B-a SoVITS 训练 / 1B-b GPT 训练。
+
 ---
 
 ## 换底座模型（9B / 14B / 27B / 35B，不用改配置文件）
@@ -391,15 +406,15 @@ powershell -ExecutionPolicy Bypass -File scripts\train-tts.ps1 -Serve
 
 | 档位 | 权重 | 显存 | 速度 | 现状 |
 |---|---|---|---|---|
-| `fast-9b` | 5.29GB | 全进显存 | 60~90 tok/s | ✅ 已下载 |
-| `balanced-14b` | 7.88GB | 全进显存 | 40~70 tok/s | ⬜ 待下载 |
-| `quality-27b` | 15.66GB | 44 层上 GPU | 9~10 tok/s | ✅ 已下载 |
-| `quality-35b` | 10.02GB | `--n-cpu-moe 8` → 约 9.85GB | 5~15 tok/s | ⬜ 待下载 |
+| `Qwen3.5-9B-Q4_K_M` | 5.29GB | 全进显存 | 60~90 tok/s | ✅ 已下载 |
+| `Qwen3.6-14B-A3B-FableVibes-Q4_K_M` | 7.88GB | 全进显存 | 40~70 tok/s | ⬜ 待下载 |
+| `Qwen3.6-27B-Q4_K_M-mtp` | 15.66GB | 44 层上 GPU | 9~10 tok/s | ✅ 已下载 |
+| `Qwen3.6-35B-A3B-UD-IQ2_XXS` | 10.02GB | `--n-cpu-moe 8` → 约 9.85GB | 5~15 tok/s | ⬜ 待下载 |
 
 ```powershell
 # 下载（自己执行，支持断点续传）
-powershell -ExecutionPolicy Bypass -File scripts\download-models.ps1 -Tier balanced-14b -Mirror
-powershell -ExecutionPolicy Bypass -File scripts\download-models.ps1 -Tier quality-35b -Mirror
+powershell -ExecutionPolicy Bypass -File scripts\download-models.ps1 -Tier Qwen3.6-14B-A3B-FableVibes-Q4_K_M -Mirror
+powershell -ExecutionPolicy Bypass -File scripts\download-models.ps1 -Tier Qwen3.6-35B-A3B-UD-IQ2_XXS -Mirror
 
 # 想知道某个 GGUF 要多少显存、专家要放几层到内存（不用下完整个文件）
 python tools\plan_moe_offload.py --repo unsloth/Qwen3.6-35B-A3B-GGUF --file Qwen3.6-35B-A3B-UD-IQ2_XXS.gguf --ctx 8192 --budget 10
@@ -456,7 +471,7 @@ scripts\verify.ps1 -Bench           # 附加一次真实推理测速（显示 to
 scripts\download-models.ps1 -List                  # 列出档位
 scripts\download-models.ps1 -Mirror -Support       # 主模型 + 嵌入 + 重排
 python tests\verify_models.py                      # 校验仓库与文件名是否仍然可用
-scripts\start-models.ps1 -Tier fast-9b             # 只起模型服务
+scripts\start-models.ps1 -Tier Qwen3.5-9B-Q4_K_M             # 只起模型服务
 scripts\start-models.ps1 -NGpuLayers 32            # 手动指定 GPU 层数
 
 # 局域网访问（手机当麦克风和音箱；无鉴权，仅限可信网络）
@@ -487,7 +502,7 @@ python tests\reset_memory.py --apply --sessions
 |---|---|
 | 网页打不开 | 看 `logs\api.err.log`；确认 `verify.ps1 -Quick` 里网页服务是否正常 |
 | 提问报"无法连接模型服务" | 模型服务没起来或还在加载：看 `logs\llama-chat.log`，首次加载要 1~3 分钟 |
-| 生成极慢（< 2 tok/s） | GPU 层数不合适：见 `docs/显存调优.md`，或换 `-Tier fast-9b` |
+| 生成极慢（< 2 tok/s） | GPU 层数不合适：见 `docs/显存调优.md`，或换 `-Tier Qwen3.5-9B-Q4_K_M` |
 | 报显存不足 / 系统卡顿 | 减小 `--n-gpu-layers`（如 `-NGpuLayers 22`），关掉占显存的软件 |
 | 说话没反应 | 浏览器麦克风权限；`http://127.0.0.1` 属于安全上下文，权限弹窗应能出现 |
 | 提示"无法解码音频" | 装 ffmpeg：`winget install Gyan.FFmpeg` |
@@ -561,7 +576,7 @@ fastapi/httpx/numpy/faster-whisper/edge-tts 全部可导入）、`run_server.py`
 ### 已知限制
 
 1. **27B 档位速度只有 4~8 tok/s**——这是 16GB 显存的物理限制，不是软件问题。
-   想要流畅请用 `balanced-14b`（7.88GB 全部进显存，40~70 tok/s）。
+   想要流畅请用 `Qwen3.6-14B-A3B-FableVibes-Q4_K_M`（7.88GB 全部进显存，40~70 tok/s）。
 2. **无鉴权**：`-Lan` 模式下同一局域网内任何人都能访问。仅限可信网络。
 3. **记忆抽取依赖主模型质量**。27B/14B 抽取效果明显好于 9B；模型不可用时降级为规则抽取
    （宁可少记，不可记错）。
@@ -573,3 +588,5 @@ fastapi/httpx/numpy/faster-whisper/edge-tts 全部可导入）、`run_server.py`
 8. **未在真实 GPU 上端到端跑过**：开发环境的沙箱不允许启动子进程，因此
    `llama-server` 的实际推理（首次提问、tok/s、显存占用）需要你在本机完成第一步验证。
    显存与速度的预期值基于权重体积与架构推算，`docs/显存调优.md` 给出了自测流程。
+
+桌宠情绪系统与开发路线见 [AAAAGENT 对比与情绪系统](docs/AAAAGENT对比与情绪系统.md)。

@@ -345,7 +345,7 @@ CONFIG = AppConfig(paths=Paths(root=TMP))
 def _personas() -> None:
     manager = PersonaManager(CONFIG)
     personas = manager.list()
-    assert len(personas) >= 4
+    assert {p.id for p in personas} >= {"sakura_cat", "mint_bunny", "luna_witch"}
     for persona in personas:
         assert persona.system_prompt.strip()
         assert persona.voice.voice_id

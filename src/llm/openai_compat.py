@@ -128,13 +128,15 @@ class OpenAICompatBackend:
             # llama.cpp extension: reuse the KV prefix between turns. This is the
             # single biggest latency win in a chat app and is safe because every
             # turn extends the same conversation prefix.
-            body["cache_prompt"] = True
+            if self.name == "llamacpp":
+                body["cache_prompt"] = True
         if request.stop:
             body["stop"] = list(request.stop)
         if request.json_schema:
             # llama.cpp honours a raw JSON schema; OpenAI-style servers want the
             # wrapped response_format. Send both: each server ignores the other.
-            body["json_schema"] = request.json_schema
+            if self.name == "llamacpp":
+                body["json_schema"] = request.json_schema
             body["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {"name": "extraction", "strict": False, "schema": request.json_schema},

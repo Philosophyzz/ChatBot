@@ -77,6 +77,11 @@ def create_asgi_app(app: Optional[ChatBotApp] = None) -> FastAPI:
     from api.routes import router
 
     api.include_router(router)
+    from api.companion import router as companion_router
+    api.include_router(companion_router)
+    pet_assets = Path(__file__).resolve().parents[1] / "pet" / "assets"
+    if pet_assets.exists():
+        api.mount("/pet-assets", StaticFiles(directory=str(pet_assets)), name="pet-assets")
 
     @api.exception_handler(Exception)
     async def unhandled(request: Request, exc: Exception) -> JSONResponse:  # pragma: no cover

@@ -83,10 +83,36 @@ async def list_models(request: Request) -> Dict[str, Any]:
     """
     import asyncio
 
-    supervisor = getattr(_app(request), "models", None)
+    app = _app(request)
+    from core.model_connection import managed_local
+    if not managed_local(app.config.llm):
+        return {"mode": app.config.llm.mode, "current": app.config.llm.model, "tiers": [], "busy": False,
+                "connection": app.config.to_public()["llm"]}
+    supervisor = getattr(app, "models", None)
     if supervisor is None:
         raise HTTPException(status_code=503, detail="模型管理器不可用")
-    return await asyncio.to_thread(supervisor.status)
+    result = await asyncio.to_thread(supervisor.status)
+    result.update(mode="local", connection=app.config.to_public()["llm"])
+    if app.config.llm.backend != "vllm" and (app.paths.root / "data/vllm-install.json").exists():
+        try:
+            result["runtime_migration"] = json.loads((app.paths.root / "data/vllm-install.json").read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            pass
+    return result
+
+
+@router.put("/models/connection")
+async def set_model_connection(request: Request, payload: Dict[str, Any]) -> Dict[str, Any]:
+    app = _app(request)
+    try:
+        # An empty key from the UI means keep the current key only for the same endpoint.
+        if not payload.get("api_key") and str(payload.get("base_url", "")).rstrip("/") == app.config.llm.base_url.rstrip("/"):
+            payload["api_key"] = app.config.llm.api_key
+        connection = app.set_model_connection(payload)
+        _persist_overrides(app, {f"llm.{k}": v for k, v in connection.items()})
+        return {"connection": app.config.to_public()["llm"], "ok": True}
+    except BadRequest as exc:
+        return _error_response(exc)
 
 
 @router.post("/models/switch")
@@ -183,26 +209,19 @@ async def patch_config(request: Request, patch: SettingsPatch) -> Dict[str, Any]
 def _persist_overrides(app: Any, applied: Dict[str, Any]) -> None:
     """Write changed settings to config/local.yaml so they survive a restart."""
     path = app.config.paths.config_dir / "local.yaml"
-    nested: Dict[str, Dict[str, Any]] = {}
+    from core.config import load_yaml_or_json
+    existing = load_yaml_or_json(path)
     for key, value in applied.items():
         if "." in key:
             section, _, field = key.partition(".")
-            nested.setdefault(section, {})[field] = value
+            existing.setdefault(section, {})[field] = value
         else:
-            nested.setdefault("_root", {})[key] = value
-    lines: List[str] = ["# 由设置界面写入的运行时覆盖；优先级高于 config.yaml\n", "# 该文件由程序维护，手改前请先停止服务。\n"]
-    for section, fields in nested.items():
-        if section == "_root":
-            for key, value in fields.items():
-                lines.append(f"{key}: {json.dumps(value, ensure_ascii=False)}\n")
-        else:
-            lines.append(f"{section}:\n")
-            for key, value in fields.items():
-                lines.append(f"  {key}: {json.dumps(value, ensure_ascii=False)}\n")
-    try:
-        path.write_text("".join(lines), encoding="utf-8")
-    except OSError as exc:  # pragma: no cover
-        log.warning("could not persist settings overrides", extra={"error": str(exc)})
+            existing[key] = value
+    # JSON is valid YAML and preserves all unrelated machine-specific settings.
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".yaml.tmp")
+    tmp.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
 
 
 @router.get("/plugins")
@@ -229,7 +248,7 @@ async def list_plugins(request: Request) -> Dict[str, Any]:
 @router.get("/personas")
 async def list_personas(request: Request) -> Dict[str, Any]:
     app = _app(request)
-    default = app.config.default_persona
+    default = app.personas.get(None).id
     return {
         "personas": [persona.to_public() for persona in app.personas.list()],
         # Sent explicitly so the UI can badge/highlight the default instead of guessing
@@ -250,7 +269,7 @@ async def get_persona(request: Request, persona_id: str) -> Dict[str, Any]:
 async def upsert_persona(request: Request, persona_id: str, payload: PersonaUpsertRequest) -> Dict[str, Any]:
     app = _app(request)
     try:
-        persona = app.personas.upsert(persona_id, payload.model_dump())
+        persona = app.personas.upsert(persona_id, payload.model_dump(exclude_unset=True))
     except BadRequest as exc:
         return _error_response(exc)
     return {"persona": persona.to_public()}
@@ -301,6 +320,17 @@ async def get_session(request: Request, session_id: str, limit: int = 100) -> Di
     except NotFound as exc:
         return _error_response(exc)
     return {"session": session.to_public(limit=limit)}
+
+
+@router.get("/emotions")
+async def emotions(request: Request, persona_id: Optional[str] = None, limit: int = 20) -> Dict[str, Any]:
+    app = _app(request)
+    persona = app.personas.get(persona_id)
+    service = app.engine.emotions
+    if service is None:
+        return {"enabled": False, "persona_id": persona.id, "user": None, "pet": None,
+                "observations": [], "snapshots": []}
+    return service.view(persona.id, limit=max(0, min(100, limit)))
 
 
 @router.patch("/sessions/{session_id}")
@@ -700,7 +730,8 @@ def _frame(tag: bytes, payload: bytes | Dict[str, Any]) -> bytes:
 def _resolve_voice(app: Any, payload: TTSRequest) -> tuple[VoiceSpec, Optional[str]]:
     """Persona voice with optional per-request overrides. Shared by both TTS routes."""
     persona = app.personas.get(payload.persona_id) if payload.persona_id else app.personas.get(None)
-    voice = persona.voice
+    emotions = getattr(app.engine, "emotions", None)
+    voice = emotions.voice(persona) if emotions is not None else persona.voice
     if payload.voice:
         merged = voice.to_public()
         merged.update(payload.voice)

@@ -152,6 +152,8 @@ def run_selftest(args: argparse.Namespace) -> int:
         personas, default = [], None
 
     window = PetWindow(client, persona_id=default, with_tray=False)
+    # Deterministic build checks must not depend on the user's saved zoom level.
+    window.set_scale(1.0, persist=False)
     window.personas = personas
     window._apply_persona()
     check("桌宠窗口已构建", window.width() == PET_SIZE, f"{window.width()}x{window.height()}")
@@ -275,6 +277,8 @@ def resolve_persona(client, persona_id: Optional[str]):
         personas, default = client.personas()
     except Exception:  # noqa: BLE001 - backend down is a normal starting state
         return (persona_id or "default"), None
+    from persona.catalog import LEGACY_IDS
+    persona_id = LEGACY_IDS.get(persona_id, persona_id)
     if not persona_id:
         persona_id = default or (personas[0].get("id") if personas else None) or "default"
     name = None
@@ -286,12 +290,14 @@ def resolve_persona(client, persona_id: Optional[str]):
 
 
 def run_gui(args: argparse.Namespace) -> int:
+    from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication
 
     from pet import single_instance
     from pet.client import BackendClient
     from pet.window import PetWindow
 
+    QApplication.setAttribute(Qt.AA_ShareOpenGLContexts)
     app = QApplication(sys.argv)
     app.setApplicationName("ChatBotPet")
     app.setQuitOnLastWindowClosed(False)  # closing the window keeps the tray alive
@@ -319,6 +325,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="本地聊天机器人桌宠")
     parser.add_argument("--url", default="http://127.0.0.1:8077", help="后端地址")
     parser.add_argument("--persona", default=None, help="启动时使用的人设 id")
+    parser.add_argument("--no-backend", action="store_true", help="只显示桌宠，不自动启动服务")
+    parser.add_argument("--mock", action="store_true", help="启动模拟后端")
     parser.add_argument("--selftest", action="store_true", help="离屏自检并退出")
     parser.add_argument(
         "--import-check",
@@ -344,6 +352,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             return run_import_check(args)
         if args.selftest or args.screenshot:
             return run_selftest(args)
+        if not args.no_backend:
+            from pet.bootstrap import ensure_backend
+            ensure_backend(args.url, mock=args.mock)
         return run_gui(args)
     except BaseException as exc:  # noqa: BLE001 - a GUI crash must leave a trace
         path = write_crash(exc)

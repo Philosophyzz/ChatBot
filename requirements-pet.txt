@@ -1,0 +1,9 @@
+# Desktop client dependencies; the model server does not need Qt.
+PySide6>=6.6
+httpx>=0.27
+sounddevice>=0.4.6
+soundfile>=0.12
+live2d-py==0.6.1.1
+winsdk==1.0.0b10; sys_platform == "win32"
+PyAudioWPatch==0.2.12.8; sys_platform == "win32"
+psutil>=5.9

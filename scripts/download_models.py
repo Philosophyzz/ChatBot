@@ -15,8 +15,8 @@ fails at 95% is expensive. This tool therefore
 
 Usage::
 
-    python scripts/download_models.py --tier balanced-14b
-    python scripts/download_models.py --tier quality-27b --mirror
+    python scripts/download_models.py --tier Qwen3.6-14B-A3B-FableVibes-Q4_K_M
+    python scripts/download_models.py --tier Qwen3.6-27B-Q4_K_M-mtp --mirror
     python scripts/download_models.py --support          # embedding + reranker
     python scripts/download_models.py --list             # show tiers and sizes
 """
@@ -39,6 +39,12 @@ from typing import Any, Dict, List, Optional, Tuple
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "config" / "models.json"
 MANIFEST = ROOT / "data" / "models.manifest.json"
+
+
+def models_root() -> Path:
+    sys.path.insert(0, str(ROOT / "src"))
+    from core.config import load_config as load_app_config
+    return load_app_config(ROOT).paths.models_dir
 
 MIRROR = "https://hf-mirror.com"
 CHUNK = 4 * 1024 * 1024
@@ -226,23 +232,57 @@ def fetch_model(spec: Dict[str, Any], *, mirror: bool, token: Optional[str], tie
         actual, size = resolved
         if actual != filename:
             log(f"    文件名已变更为 {actual}")
-        target = ROOT / "models" / "gguf" / spec["local_name"]
+        target = models_root() / "gguf" / spec["local_name"]
         expected = size or int(float(spec.get("size_gb") or 0) * 1024 ** 3)
         if not ensure_free_space(target.parent, expected):
             return None
-        log(f"    目标 {target.relative_to(ROOT)}（{human(expected)}）")
+        log(f"    目标 {target}（{human(expected)}）")
         url = file_url(repo, actual, mirror=mirror)
         if download(url, target, token=token, expected=size or 0):
             log("    计算 sha256…")
+            digest = sha256_of(target)
+            expected_sha = str(spec.get("sha256") or "").lower()
+            if expected_sha and digest.lower() != expected_sha:
+                log(f"    [x] sha256 校验失败：期望 {expected_sha}，实际 {digest}；删除损坏文件")
+                target.unlink(missing_ok=True)
+                return None
+            companions = []
+            companion_name = str(spec.get("mmproj_local_name") or "")
+            companion_file = str(spec.get("mmproj_file") or "")
+            if companion_name and companion_file:
+                companion_repo = str(spec.get("mmproj_repo") or repo)
+                log(f"  查询图像投影文件 {companion_repo}/{companion_file}")
+                companion = resolve_file(companion_repo, companion_file, mirror=mirror, token=token)
+                if companion is None:
+                    log("    [x] 没找到与此量化匹配的图像投影文件")
+                    return None
+                companion_actual, companion_size = companion
+                companion_target = target.parent / companion_name
+                if not ensure_free_space(companion_target.parent, companion_size):
+                    return None
+                companion_url = file_url(companion_repo, companion_actual, mirror=mirror)
+                if not download(companion_url, companion_target, token=token, expected=companion_size):
+                    return None
+                log("    校验图像投影 sha256…")
+                companion_digest = sha256_of(companion_target)
+                expected_companion_sha = str(spec.get("mmproj_sha256") or "").lower()
+                if expected_companion_sha and companion_digest.lower() != expected_companion_sha:
+                    log(f"    [x] 图像投影 sha256 校验失败；删除损坏文件")
+                    companion_target.unlink(missing_ok=True)
+                    return None
+                companions.append({"repo": companion_repo, "file": companion_actual,
+                                   "local_name": companion_name, "size_bytes": companion_target.stat().st_size,
+                                   "sha256": companion_digest, "path": companion_target.as_posix()})
             return {
                 "id": spec["id"],
                 "tier": tier,
                 "repo": repo,
                 "file": actual,
                 "local_name": spec["local_name"],
-                "path": str(target.relative_to(ROOT)).replace("\\", "/"),
+                "path": target.as_posix(),
                 "size_bytes": target.stat().st_size,
-                "sha256": sha256_of(target),
+                "sha256": digest,
+                "companions": companions,
                 "n_gpu_layers": spec.get("n_gpu_layers"),
                 "ctx": spec.get("ctx"),
                 "port": spec.get("port"),
@@ -278,7 +318,7 @@ def list_tiers(config: Dict[str, Any]) -> None:
     for spec in config["support_models"]:
         log(f"   {spec['id']:<12} {spec.get('size_gb', 0):>5}GB  {spec['label']}")
     log("")
-    log("用法：python scripts/download_models.py --tier balanced-14b --support")
+    log("用法：python scripts/download_models.py --tier Qwen3.6-14B-A3B-FableVibes-Q4_K_M --support")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -313,7 +353,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     log("")
     log(f"下载源：{'hf-mirror.com（镜像）' if args.mirror else 'huggingface.co'}")
-    log(f"目标目录：{ROOT / 'models' / 'gguf'}")
+    log(f"目标目录：{models_root() / 'gguf'}")
     if not args.mirror:
         log("提示：国内网络若很慢或超时，加上 --mirror 参数。")
     log("")
@@ -354,7 +394,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     log("")
     if failures:
         log(f"以下模型未能下载：{', '.join(failures)}")
-        log("可换镜像重试：--mirror；或手动下载后放入 models/gguf/ 并保持文件名一致。")
+        log("可换镜像重试：--mirror；或手动下载后放入 配置的模型目录并保持文件名一致。")
         return 1
     log("全部完成。下一步：")
     log("  powershell -ExecutionPolicy Bypass -File scripts\\verify.ps1")

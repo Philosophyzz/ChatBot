@@ -48,6 +48,7 @@ class BackendClient:
         #: *after* the last audio frame (which engine spoke, how many frames, elapsed ms),
         #: so it cannot be attached to any audio chunk — it lands here instead.
         self.last_tts_meta: Dict[str, Any] = {}
+        self._sessions: Dict[str, str] = {}
 
     def close(self) -> None:
         self._client.close()
@@ -74,11 +75,23 @@ class BackendClient:
         body = response.json()
         return body.get("personas") or [], body.get("default")
 
+    def update_persona(self, persona: Dict[str, Any]) -> Dict[str, Any]:
+        response = self._client.put(f"/api/personas/{persona['id']}", json=persona, timeout=30)
+        if response.is_error:
+            raise BackendError(response.text[:400])
+        return response.json()
+
     # -- base model --------------------------------------------------------------------
     def models(self) -> Dict[str, Any]:
         """Available base-model tiers, which are downloaded, and what is running."""
         response = self._client.get("/api/models", timeout=30)
         response.raise_for_status()
+        return response.json()
+
+    def set_model_connection(self, values: Dict[str, Any]) -> Dict[str, Any]:
+        response = self._client.put("/api/models/connection", json=values, timeout=30)
+        if response.is_error:
+            raise BackendError(response.text[:400])
         return response.json()
 
     def switch_model(self, tier_id: str) -> Dict[str, Any]:
@@ -96,7 +109,10 @@ class BackendClient:
     # -- chat --------------------------------------------------------------------------
     def chat_stream(self, text: str, *, persona_id: Optional[str] = None) -> Iterator[ChatEvent]:
         """Stream one turn. Yields text deltas, then a final ``done`` event."""
-        payload: Dict[str, Any] = {"message": text, "stream": True}
+        payload: Dict[str, Any] = {"message": text, "stream": True, "voice_mode": True}
+        session_key = persona_id or "default"
+        if session_key in self._sessions:
+            payload["session_id"] = self._sessions[session_key]
         if persona_id:
             payload["persona_id"] = persona_id
         try:
@@ -119,6 +135,8 @@ class BackendClient:
                     except json.JSONDecodeError:
                         continue
                     kind = data.get("kind") or event_name
+                    if kind == "session" and data.get("session", {}).get("id"):
+                        self._sessions[session_key] = data["session"]["id"]
                     if kind == "text":
                         yield ChatEvent("text", text=str(data.get("text") or ""), data=data)
                     elif kind == "done":
@@ -126,7 +144,7 @@ class BackendClient:
                     elif kind == "error":
                         error = data.get("error") or {}
                         raise BackendError(str(error.get("message") or "对话出错"))
-                    elif kind in {"memory", "memory_skipped", "session", "thinking"}:
+                    elif kind in {"memory", "memory_skipped", "session", "thinking", "emotion"}:
                         yield ChatEvent(kind, text=str(data.get("text") or ""), data=data)
         except httpx.HTTPError as exc:
             raise BackendError(f"对话请求失败：{exc}") from exc

@@ -1,0 +1,3 @@
+# Optional; import a complete model folder via the desktop pet's right-click menu.
+live2d-py>=0.3,<0.7
+PySide6>=6.6

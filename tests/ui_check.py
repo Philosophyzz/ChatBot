@@ -175,9 +175,24 @@ def build_checks() -> List[Tuple[str, str, Any]]:
             "none",
         ),
         (
-            "默认人设是温柔姐姐",
+            "默认人设是樱樱",
             "(document.querySelector('#persona-name')||{}).textContent",
-            "温柔姐姐",
+            "樱樱",
+        ),
+        (
+            "角色头像使用对应立绘",
+            "document.querySelector('#persona-avatar img').getAttribute('src')",
+            "/pet-assets/sakura_cat.png",
+        ),
+        (
+            "系统提供本地与 API 模式",
+            "Array.from(document.querySelector('#connection-mode').options).map(o=>o.value).join(',')",
+            "local,api",
+        ),
+        (
+            "编辑器保留角色初始记忆与专属形象",
+            "openPersonaModal(currentPersona()); var valid=document.querySelector('#pf-memory').value.includes('樱樱') && document.querySelector('#pf-skin').value==='sakura_cat'; document.querySelector('[data-action=persona-cancel]').click(); valid",
+            True,
         ),
         (
             "记忆面板顶部有“自动提取”说明",
@@ -185,6 +200,14 @@ def build_checks() -> List[Tuple[str, str, Any]]:
             "(async function(){document.querySelector('[data-tab=\"memory\"]').click();"
             "for (var i=0;i<25;i++){await new Promise(function(r){setTimeout(r,150)});"
             "if (document.querySelector('.memory-notice')) return true;} return false;})()",
+            True,
+        ),
+        (
+            "情绪页区分用户情绪与桌宠心情，并保留消息快照",
+            "(async function(){await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},"
+            "body:JSON.stringify({message:'我很难过',persona_id:state.personaId,stream:false})});"
+            "state.memoryTab='emotion';await loadMemory();const t=document.querySelector('#memory-body').textContent;"
+            "return t.includes('难过')&&t.includes('关心')&&t.includes('快照')&&t.includes('未估计');})()",
             True,
         ),
         (
@@ -214,7 +237,10 @@ def build_checks() -> List[Tuple[str, str, Any]]:
 
 
 async def run(args: argparse.Namespace) -> int:
-    from websockets.asyncio.client import connect
+    try:
+        from websockets.asyncio.client import connect
+    except ImportError:  # websockets 12 remains supported by requirements.txt.
+        from websockets.client import connect
 
     executable = args.browser or find_browser()
     if not executable:

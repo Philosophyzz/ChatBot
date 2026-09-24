@@ -113,6 +113,8 @@ def _resolve_from_root(config: Any, value: Any) -> Optional[str]:
         return str(value)
     if path.is_absolute():
         return str(path)
+    if path.parts and path.parts[0] == "models":
+        return str(config.paths.models_dir.joinpath(*path.parts[1:]))
     root = getattr(getattr(config, "paths", None), "root", None)
     return str((Path(str(root)) / path) if root else path)
 

@@ -132,7 +132,7 @@ if (-not $Quick -and -not $SkipTests -and $python) {
 
 # --- 5. 模型文件 -------------------------------------------------------------
 Write-Step '模型文件'
-$ggufDir = Join-Path $ProjectRoot 'models\gguf'
+$ggufDir = Join-Path (Get-ModelsRoot -Root $ProjectRoot) 'gguf'
 $ggufFiles = @()
 if (Test-Path -LiteralPath $ggufDir) {
     $ggufFiles = @(Get-ChildItem -LiteralPath $ggufDir -Filter '*.gguf' -ErrorAction SilentlyContinue)
@@ -201,7 +201,7 @@ if ($Bench -and $upCount -gt 0) {
                 $response.timings.prompt_per_second, $response.timings.predicted_per_second, $response.timings.cache_n) `
                 -ForegroundColor DarkGray
             Write-Host '    若生成速度低于 3 tok/s：减小 --n-gpu-layers 反而可能更快（避免显存抖动），' -ForegroundColor DarkGray
-            Write-Host '    或改用 -Tier balanced-14b 把权重全部放进显存。' -ForegroundColor DarkGray
+            Write-Host '    或改用 -Tier Qwen3.6-14B-A3B-FableVibes-Q4_K_M 把权重全部放进显存。' -ForegroundColor DarkGray
         }
     } catch {
         Write-Warn2 "测速失败：$($_.Exception.Message)"

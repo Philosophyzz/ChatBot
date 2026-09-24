@@ -25,6 +25,7 @@ def pet(tmp_path, monkeypatch):
     monkeypatch.setattr(PetWindow, "refresh_models", lambda self: None)
     window = PetWindow(BackendClient("http://127.0.0.1:1"), persona_id="test", with_tray=False)
     window._anim.stop()
+    window.muted = True
     yield window, app
     window.bubble.close()
     window.close()
@@ -93,6 +94,8 @@ def test_hover_and_click_animate_without_breaking_chat(pet):
     assert before.toImage() != after.toImage()
     QTest.mouseClick(window, Qt.LeftButton, pos=QPoint(100, 90))
     assert window._affection == 1
+    assert window.bubble.input.isHidden()
+    QTest.mouseDClick(window, Qt.LeftButton, pos=QPoint(100, 90))
     assert not window.bubble.input.isHidden()
     for _ in range(45):
         window._tick()

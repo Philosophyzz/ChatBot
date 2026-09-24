@@ -29,64 +29,14 @@ def render_png(size: int) -> bytes:
     from PySide6.QtGui import QPainter, QPixmap
     from PySide6.QtWidgets import QApplication
 
-    from pet.window import EMOTION_COLORS, parse_color
-
+    from pet.skin import builtin_skin_path
     app = QApplication.instance() or QApplication([])
-    from PySide6.QtGui import QColor, QFont, QPainterPath, QPen, QBrush
-    import math
-
-    pixmap = QPixmap(size, size)
-    pixmap.fill(Qt.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.Antialiasing, True)
-
-    # A trimmed-down version of the window's character (no name tag, no microphone):
-    # an icon has to read at 16px, so only the silhouette and the face survive.
-    accent = parse_color(EMOTION_COLORS["sweet"])
-    rect = QRectF(size * 0.06, size * 0.06, size * 0.88, size * 0.88)
-    width = rect.width() * 0.78
-    height = rect.height() * 0.78
-    body = QRectF(rect.center().x() - width / 2, rect.top() + rect.height() * 0.16, width, height)
-
-    for sign in (-1, 1):
-        ear = QPainterPath()
-        base_x = rect.center().x() + sign * width * 0.30
-        ear.moveTo(base_x - size * 0.07, body.top() + size * 0.07)
-        ear.lineTo(base_x + sign * size * 0.03, body.top() - size * 0.14)
-        ear.lineTo(base_x + size * 0.08, body.top() + size * 0.05)
-        ear.closeSubpath()
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(QBrush(accent.darker(115)))
-        painter.drawPath(ear)
-
-    path = QPainterPath()
-    path.addRoundedRect(body, width * 0.42, width * 0.42)
-    painter.setBrush(QBrush(accent))
-    painter.setPen(QPen(QColor(255, 255, 255, 70), max(1.0, size * 0.008)))
-    painter.drawPath(path)
-
-    face = body.adjusted(width * 0.17, height * 0.22, -width * 0.17, -height * 0.30)
-    painter.setPen(Qt.NoPen)
-    painter.setBrush(QBrush(QColor(255, 253, 250, 245)))
-    painter.drawRoundedRect(face, face.width() * 0.42, face.width() * 0.42)
-
-    eye_r = face.width() * 0.085
-    eye_y = face.center().y() - face.height() * 0.10
-    painter.setBrush(QBrush(QColor(40, 42, 58)))
-    for sign in (-1, 1):
-        painter.drawEllipse(
-            QRectF(face.center().x() + sign * face.width() * 0.22 - eye_r, eye_y - eye_r, eye_r * 2, eye_r * 2)
-        )
-    painter.setBrush(QBrush(QColor(255, 140, 170, 120)))
-    for sign in (-1, 1):
-        painter.drawEllipse(
-            QRectF(face.center().x() + sign * face.width() * 0.34 - size * 0.045, eye_y + eye_r * 1.6, size * 0.09, size * 0.045)
-        )
-    painter.setBrush(Qt.NoBrush)
-    painter.setPen(QPen(QColor(60, 62, 82), max(1.2, size * 0.012), Qt.SolidLine, Qt.RoundCap))
-    painter.drawArc(QRectF(face.center().x() - size * 0.09, eye_y + eye_r * 2.4, size * 0.18, size * 0.10), 200 * 16, 140 * 16)
-    painter.end()
-
+    from core.config import load_config
+    path = builtin_skin_path(load_config().default_persona) or builtin_skin_path("hiyori")
+    if path is None:
+        raise RuntimeError("Missing default character artwork")
+    source = QPixmap(str(path))
+    pixmap = source.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
     buffer = QBuffer(QByteArray())
     buffer.open(QBuffer.WriteOnly)
     pixmap.save(buffer, "PNG")

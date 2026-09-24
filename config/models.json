@@ -1,35 +1,9 @@
 {
   "_comment": [
-    "模型档位表 —— 供 scripts/download-models.ps1 与 scripts/start-models.ps1 读取。",
-    "修改这里即可切换主模型，无需改动任何脚本或 Python 代码。",
-    "",
-    "default_tier 必须与 config/config.yaml 的 llm.model 一致，否则启动脚本会去找一个",
-    "没下载的模型。这里选 quality-27b 是因为它已经下载完成（15.66GB）。",
-    "",
-    "想换更快的档位（推荐日常使用）：",
-    "  1) scripts\\download-models.ps1 -Mirror -Tier balanced-14b   # 只下 7.88GB",
-    "  2) config\\config.yaml -> llm.model: balanced-14b",
-    "  3) config\\models.json -> default_tier: balanced-14b",
-    "  4) scripts\\stop.ps1 ; scripts\\start-all.ps1",
-    "balanced-14b 是 MoE（每 token 仅激活约 3B），权重 7.88GB 全部进显存，约 40~70 tok/s；",
-    "quality-27b 权重 15.66GB 装不进 12.5GB 可用显存，需分层卸载，只有 4~8 tok/s。",
-    "",
-    "本文件中的每个仓库与文件名都已用 tests/verify_models.py 对着 HuggingFace API 实测校验过；",
-    "下载完成后用 tests/verify_downloads.py 校验完整性（截断的 GGUF 会在加载时报难懂的错）。",
-    "",
-    "tier 字段说明：",
-    "  id            档位标识（同时用作 llama-server 的 --alias），下载与启动脚本用它取模型",
-    "  label         人类可读名称",
-    "  repo          HuggingFace 仓库（--mirror 可切到 hf-mirror.com）",
-    "  file          GGUF 文件名（下载脚本会通过 HF API 校验并自动纠正大小写/命名差异）",
-    "  local_name    落盘后的文件名（固定 ASCII，避免中文路径问题）",
-    "  size_gb       预期体积（实测值），用于下载前提示与磁盘校验",
-    "  n_gpu_layers  默认卸载到 GPU 的层数（-1 表示全部）",
-    "  ctx           建议上下文长度（KV cache 与权重争夺显存，故按档位区分）",
-    "  expected_tps  在 RTX 5080 16GB 上的大致生成速度，仅供预期管理",
-    "  notes         取舍说明"
+    "模型 ID 使用原始模型文件名（去掉 .gguf），不使用速度或质量昵称。",
+    "本地模型目录由 config/config.yaml 的 paths.models_dir 设置。"
   ],
-  "default_tier": "fast-9b",
+  "default_tier": "MiMo-V2.6-Distill-Qwen-9B-Q8_0",
   "default_server_args": [
     "--flash-attn",
     "on",
@@ -47,8 +21,25 @@
   ],
   "chat_tiers": [
     {
-      "id": "quality-35b",
-      "label": "最强质量：Qwen3.6-35B-A3B UD-IQ2_XXS（MoE 256 专家，专家分流到内存，显存约 9.9GB）",
+      "id": "MiMo-V2.6-Distill-Qwen-9B-Q8_0",
+      "label": "MiMo-V2.6-Distill-Qwen-9B-Q8_0",
+      "repo": "ggml-org/MiMo-V2.6-Distill-Qwen-9B-GGUF",
+      "file": "MiMo-V2.6-Distill-Qwen-9B-Q8_0.gguf",
+      "local_name": "MiMo-V2.6-Distill-Qwen-9B-Q8_0.gguf",
+      "size_gb": 9.53,
+      "n_gpu_layers": -1,
+      "ctx": 8192,
+      "expected_tps": "按 RTX 5080 实际运行测量",
+      "mmproj_repo": "ggml-org/MiMo-V2.6-Distill-Qwen-9B-GGUF",
+      "mmproj_file": "mmproj-MiMo-V2.6-Distill-Qwen-9B-Q8_0.gguf",
+      "mmproj_local_name": "mmproj-MiMo-V2.6-Distill-Qwen-9B-Q8_0.gguf",
+      "mmproj_sha256": "4b77e812662a106d6739edf2a3e8e16e0e22291154c0b22a13dab42450410337",
+      "sha256": "de6dae10334e088876358ef9f574835bb3b401ea2ecf5d6a9473f37894df6b73",
+      "notes": "小米 MiMo-V2.6 蒸馏自 Qwen3.5-9B。GGML 官方 GGUF Q8_0；约 9.53 GB 加 624 MB 图像投影，RTX 5080 16GB 可单模型加载。MIT。"
+    },
+    {
+      "id": "Qwen3.6-35B-A3B-UD-IQ2_XXS",
+      "label": "Qwen3.6-35B-A3B-UD-IQ2_XXS",
       "repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
       "file": "Qwen3.6-35B-A3B-UD-IQ2_XXS.gguf",
       "fallback_repos": [
@@ -61,7 +52,7 @@
           "file": "Qwen3.6-35B-A3B-UD-IQ2_XXS.gguf"
         }
       ],
-      "local_name": "qwen3.6-35b-a3b-iq2_xxs.gguf",
+      "local_name": "Qwen3.6-35B-A3B-UD-IQ2_XXS.gguf",
       "size_gb": 10.02,
       "n_gpu_layers": -1,
       "ctx": 8192,
@@ -73,8 +64,8 @@
       "notes": "实测自文件头（tools\\plan_moe_offload.py，不用下完整个模型就能算）：40 层、256 个专家，专家权重 8.44GB、其余（注意力/词表/norm）1.57GB；ctx 8192 + q8_0 KV 约 0.31GB。--n-cpu-moe 8 表示前 8 层的专家留在内存 → 显存约 9.85GB，内存约 1.7GB。0 层（全部进显存）需要 11.5GB，16GB 卡上只有关掉浏览器才行。这是 35B 唯一能稳定压进 10GB 显存的方案；代价是速度（MoE 每 token 只激活约 3B，CPU 部分吃内存带宽）。想质量更高可换 UD-Q2_K_XL（11.45GB），再用 plan_moe_offload.py 算出需要的 --n-cpu-moe。"
     },
     {
-      "id": "balanced-14b",
-      "label": "均衡首选：Qwen3.6-14B-A3B Q4_K_M（MoE 激活约 3B，权重全部进显存）",
+      "id": "Qwen3.6-14B-A3B-FableVibes-Q4_K_M",
+      "label": "Qwen3.6-14B-A3B-FableVibes-Q4_K_M",
       "repo": "tvall43/Qwen3.6-14B-A3B-FableVibes-GGUF",
       "file": "Qwen3.6-14B-A3B-FableVibes-Q4_K_M.gguf",
       "fallback_repos": [
@@ -87,16 +78,16 @@
           "file": "Qwen3.6-14B-A3B-FableVibes-Q5_K_M.gguf"
         }
       ],
-      "local_name": "qwen3.6-14b-a3b-q4_k_m.gguf",
+      "local_name": "Qwen3.6-14B-A3B-FableVibes-Q4_K_M.gguf",
       "size_gb": 7.88,
       "n_gpu_layers": -1,
       "ctx": 32768,
       "expected_tps": "40~70 tok/s",
-      "notes": "7.88GB 全部进显存，聊天速度接近 9B 但理解力明显更好，是 16GB 卡上最舒服的一档。注意：14B 目前没有官方 GGUF，这是社区微调版（FableVibes，下载量最高的 14B-A3B 量化），对话风格更偏角色扮演；如果发现它做记忆抽取的 JSON 不稳，就切回 fast-9b 或 quality-35b。备选量化：Q3_K_M 6.30GB（更省显存）、Q5_K_M 9.18GB（更高质量）。"
+      "notes": "7.88GB 全部进显存，聊天速度接近 9B 但理解力明显更好，是 16GB 卡上最舒服的一档。注意：14B 目前没有官方 GGUF，这是社区微调版（FableVibes，下载量最高的 14B-A3B 量化），对话风格更偏角色扮演；如果发现它做记忆抽取的 JSON 不稳，就切回 Qwen3.5-9B-Q4_K_M 或 Qwen3.6-35B-A3B-UD-IQ2_XXS。备选量化：Q3_K_M 6.30GB（更省显存）、Q5_K_M 9.18GB（更高质量）。"
     },
     {
-      "id": "quality-27b",
-      "label": "质量优先：Qwen3.6-27B Q4_K_M（部分层卸载到内存）",
+      "id": "Qwen3.6-27B-Q4_K_M-mtp",
+      "label": "Qwen3.6-27B-Q4_K_M-mtp",
       "repo": "froggeric/Qwen3.6-27B-MTP-GGUF",
       "file": "Qwen3.6-27B-Q4_K_M-mtp.gguf",
       "fallback_repos": [
@@ -109,16 +100,16 @@
           "file": "Qwen3.5-27B-Q4_K_M.gguf"
         }
       ],
-      "local_name": "qwen3.6-27b-q4_k_m.gguf",
+      "local_name": "Qwen3.6-27B-Q4_K_M-mtp.gguf",
       "size_gb": 15.66,
       "n_gpu_layers": 44,
       "ctx": 8192,
       "expected_tps": "9~10 tok/s",
-      "notes": "27B 稠密模型：GPU 层数为实测最优值（28 层 5.74 tok/s、40 层 8.25、46 层 10.14、全部卸载会 OOM）。取 44 层是在 16GB 卡上留出余量给浏览器/语音模型（46 层占 11.4GB，过于贴近上限）。若显存报错就降到 40。前提：bin\\llama.cpp 必须同时包含 llama-b*-bin-win-cuda-*.zip 与 cudart-llama-bin-win-cuda-*.zip 两个包，否则会静默退回 CPU（只有约 3.6 tok/s）。想省显存又不想掉质量，优先试 quality-35b（MoE + 专家分流）。"
+      "notes": "27B 稠密模型：GPU 层数为实测最优值（28 层 5.74 tok/s、40 层 8.25、46 层 10.14、全部卸载会 OOM）。取 44 层是在 16GB 卡上留出余量给浏览器/语音模型（46 层占 11.4GB，过于贴近上限）。若显存报错就降到 40。前提：bin\\llama.cpp 必须同时包含 llama-b*-bin-win-cuda-*.zip 与 cudart-llama-bin-win-cuda-*.zip 两个包，否则会静默退回 CPU（只有约 3.6 tok/s）。想省显存又不想掉质量，优先试 Qwen3.6-35B-A3B-UD-IQ2_XXS（MoE + 专家分流）。"
     },
     {
-      "id": "fast-9b",
-      "label": "速度优先：Qwen3.5-9B Q4_K_M（官方仓库）",
+      "id": "Qwen3.5-9B-Q4_K_M",
+      "label": "Qwen3.5-9B-Q4_K_M",
       "repo": "unsloth/Qwen3.5-9B-GGUF",
       "file": "Qwen3.5-9B-Q4_K_M.gguf",
       "fallback_repos": [

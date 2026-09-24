@@ -67,6 +67,7 @@ class ChatBotApp:
         self.started_at: float = 0.0
         self.status: List[ComponentStatus] = []
         self._chat_semaphore: Optional[Any] = None  # asyncio.Semaphore, created on start
+        self._retired_llms: List[Any] = []
 
     # ----------------------------------------------------------------------------------
     # Startup
@@ -101,6 +102,11 @@ class ChatBotApp:
         """Switch the base model (blocking work moved off the event loop) and rebind."""
         import asyncio
 
+        from core.model_connection import managed_local
+        if not managed_local(self.config.llm):
+            from llm.supervisor import ModelSwitchError
+            raise ModelSwitchError("档位切换只用于本项目的本地 8080 服务；当前连接请在模型调用设置中切换")
+
         if self.models is None:
             raise RuntimeError("模型管理器没有初始化")
         result = await asyncio.to_thread(self.models.switch, tier_id, on_ready=None)
@@ -118,7 +124,7 @@ class ChatBotApp:
         # ---- Base model supervisor ------------------------------------------------
         # Created before the LLM client so a failed switch can still report which tiers
         # exist and which model files are actually on disk.
-        self.models = ModelSupervisor(self.paths.root, self.config, port=self._llm_port())
+        self.models = self._create_model_manager()
 
         # ---- LLM -----------------------------------------------------------------
         use_mock = self.config.llm.mock if mock is None else mock
@@ -209,7 +215,7 @@ class ChatBotApp:
                 await self.memory.close()
             except Exception:  # noqa: BLE001
                 log.exception("error closing memory subsystem")
-        for component in (self.stt, self.tts, self.llm):
+        for component in (self.stt, self.tts, self.llm, *self._retired_llms):
             if component is not None and hasattr(component, "aclose"):
                 try:
                     await component.aclose()
@@ -254,10 +260,47 @@ class ChatBotApp:
                 if key in extra_llm:
                     kwargs[key] = extra_llm[key]
         instance = self.registry.create(KIND_LLM, backend, **kwargs)
+        instance.name = backend
         self.status.append(
             ComponentStatus("llm", True, f"{backend} @ {cfg.base_url}（模型 {cfg.model}）")
         )
         return instance
+
+    def set_model_connection(self, values: Dict[str, Any]) -> Dict[str, Any]:
+        from core.model_connection import validate_connection
+        from llm.openai_compat import OpenAICompatBackend
+
+        values = dict(values)
+        if str(values.get("base_url", "")).rstrip("/") == self.config.llm.base_url.rstrip("/"):
+            values.setdefault("backend", self.config.llm.backend)
+        connection = validate_connection(values)
+        if self.engine and self.engine._active_turns:
+            from core.errors import BadRequest
+            raise BadRequest("请等当前回复结束后再切换模型调用模式")
+        if self.models and getattr(self.models, "_progress", {}).get("state") == "switching":
+            from core.errors import BadRequest
+            raise BadRequest("请等本地模型加载完成后再切换")
+        new = OpenAICompatBackend(base_url=connection["base_url"], model=connection["model"],
+                                  api_key=connection["api_key"], name=connection["backend"],
+                                  timeout_s=self.config.llm.request_timeout_s)
+        # In-flight memory jobs may still be using the old client. Close it on shutdown.
+        if self.llm:
+            self._retired_llms.append(self.llm)
+        self.llm = new
+        for key, value in connection.items():
+            setattr(self.config.llm, key, value)
+        self.models = self._create_model_manager()
+        if self.engine:
+            self.engine.llm = new
+        if self.memory:
+            self.memory.llm = self.memory.extractor.llm = self.memory.consolidator.llm = new
+        return connection
+
+    def _create_model_manager(self):
+        if self.config.llm.backend == "vllm":
+            from llm.vllm_supervisor import VllmSupervisor
+            return VllmSupervisor(self.paths.root, self.config, port=self._llm_port())
+        return ModelSupervisor(self.paths.root, self.config, port=self._llm_port())
 
     def _build_stt(self) -> Any:
         from speech import build_stt

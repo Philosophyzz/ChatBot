@@ -21,7 +21,7 @@ import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
 
-from PySide6.QtCore import QPoint, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QPointF, QPoint, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QBrush, QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap, QRadialGradient
 from PySide6.QtWidgets import (
     QApplication,
@@ -50,6 +50,8 @@ from pet.settings import get_settings
 log = get_logger(__name__)
 
 PET_SIZE = 210
+MIN_SCALE = 0.35
+MAX_SCALE = 3.0
 BUBBLE_MAX_WIDTH = 380
 #: Persona accent colours, keyed by the persona's dominant emotion.
 EMOTION_COLORS = {
@@ -283,6 +285,8 @@ class PetWindow(QWidget):
 
         self.recorder = Recorder()
         self.player = Player()
+        self._voice_epoch = 0
+        self._chat_busy = False
         # The player runs on its own thread; hop back to the GUI thread via a signal.
         self.player.on_state = lambda speaking: self.speaking.emit(bool(speaking))
         self.worker_ok.connect(self._dispatch_ok)
@@ -299,6 +303,34 @@ class PetWindow(QWidget):
         self.skin_path: Optional[str] = None
         self.skin_pixmap: Optional[QPixmap] = None
         self.settings = get_settings()
+        from pet.asmr import ASMRController
+        self.asmr = ASMRController(self)
+        self.scale_factor = 1.0
+        self.emotion_state = {}
+        self.pet_mood = "calm"
+        self._scale_target = 1.0
+        self._scale_anchor = None
+        self._scale_timer = QTimer(self)
+        self._scale_timer.setInterval(16)
+        self._scale_timer.timeout.connect(self._animate_scale)
+        self._scale_save_timer = QTimer(self)
+        self._scale_save_timer.setSingleShot(True)
+        self._scale_save_timer.timeout.connect(lambda: self.settings.set("scale", self._scale_target))
+        self.live2d_view = None
+        self._live2d_path = None
+        self._touch_kind = "body"
+        self._held = False
+        self._last_touch_at = 0.0
+        self.model_connection = {}
+        self.runtime_migration = {}
+        self.muted = bool(self.settings.get("muted"))
+        self._hold_timer = QTimer(self)
+        self._hold_timer.setSingleShot(True)
+        self._hold_timer.timeout.connect(self._hold_touch)
+        self._click_timer = QTimer(self)
+        self._click_timer.setSingleShot(True)
+        self._click_timer.timeout.connect(lambda: self.touch(self._touch_kind))
+        self.setMouseTracking(True)
         #: Base-model tiers (fetched from /api/models) and whether a switch is in flight.
         self.model_tiers: List[Dict[str, Any]] = []
         self.model_current: Optional[str] = None
@@ -321,6 +353,9 @@ class PetWindow(QWidget):
         self.bubble.submitted.connect(self.send_text)
         # Every show/resize repositions the bubble above the pet (see SpeechBubble.on_shown).
         self.bubble.on_shown = self._reposition_bubble
+        from pet.awareness import AwarenessController
+        self.awareness = AwarenessController(self)
+        self._action_epoch = 0
 
         self._anim = QTimer(self)
         self._anim.timeout.connect(self._tick)
@@ -342,6 +377,7 @@ class PetWindow(QWidget):
         if with_tray:
             self._build_tray()
         self._load_skin()
+        self.set_scale(self.settings.get("scale", 1.0), persist=False)
         self._place_bottom_right()
         self.refresh_personas()
         self.refresh_models()
@@ -397,8 +433,8 @@ class PetWindow(QWidget):
         if screen is None:
             return
         area = screen.availableGeometry()
-        x = area.right() - PET_SIZE - 40
-        y = area.bottom() - PET_SIZE - 60
+        x = area.right() - self.width() - 40
+        y = area.bottom() - self.height() - 60
         try:
             from pet import single_instance
 
@@ -409,10 +445,10 @@ class PetWindow(QWidget):
             log.warning("cannot list existing pets", extra={"error": str(exc)})
             taken = []
         for _ in range(8):
-            candidate = (x, y, PET_SIZE, PET_SIZE)
+            candidate = (x, y, self.width(), self.height())
             if not any(_rects_overlap(candidate, rect) for rect in taken):
                 break
-            x -= PET_SIZE + 16
+            x -= self.width() + 16
         self.move(max(area.left() + 8, x), y)
 
     def _build_tray(self) -> None:
@@ -434,6 +470,7 @@ class PetWindow(QWidget):
         return QIcon(pixmap)
 
     def _refresh_tray_appearance(self) -> None:
+        self.setWindowIcon(self._icon())
         if self.tray is not None:
             self.tray.setIcon(self._icon())
             previous = self.tray.contextMenu()
@@ -468,6 +505,9 @@ class PetWindow(QWidget):
         def done(result) -> None:
             personas, default = result
             self.personas = personas
+            from persona.catalog import LEGACY_IDS
+            if self.persona_id in LEGACY_IDS and LEGACY_IDS[self.persona_id] in {p["id"] for p in personas}:
+                self.select_persona(LEGACY_IDS[self.persona_id])
             if not self.persona_id:
                 self.persona_id = default or (personas[0]["id"] if personas else None)
             self._apply_persona()
@@ -482,14 +522,36 @@ class PetWindow(QWidget):
         self._run_async(work, done, failed)
 
     def _apply_persona(self) -> None:
-        for persona in self.personas:
-            if persona.get("id") == self.persona_id:
-                self.persona_name = str(persona.get("name") or persona.get("id"))
-                emotion = str(((persona.get("voice") or {}).get("emotion")) or "neutral")
-                self.accent = parse_color(EMOTION_COLORS.get(emotion, "#ff8fb1"))
-                break
+        from persona.catalog import CATALOG
+        persona = next((p for p in self.personas if p.get("id") == self.persona_id),
+                       CATALOG.get(self.persona_id, {}))
+        self.persona_name = str(persona.get("name") or self.persona_id or "本地助手")
+        emotion = str((persona.get("voice") or {}).get("emotion") or "neutral")
+        self.accent = parse_color(EMOTION_COLORS.get(emotion, "#ff8fb1"))
         self.setWindowTitle(f"{self.persona_name} · 桌宠")
         self._load_skin()
+        self._load_live2d()
+        self.update()
+        self.refresh_emotion()
+
+    def refresh_emotion(self) -> None:
+        persona_id = self.persona_id
+        self._run_async(lambda: self.client._client.get("/api/emotions", params={"persona_id": persona_id}).json(),
+                        lambda payload: self._apply_emotion(payload) if self.persona_id == persona_id else None,
+                        lambda exc: None)
+
+    def _apply_emotion(self, payload) -> None:
+        from core.emotion import PET_LABELS
+        previous_mood = self.pet_mood
+        self.emotion_state = payload or {}
+        self.pet_mood = (self.emotion_state.get("pet") or {}).get("label", "calm")
+        colors = {"caring": "#bfa7e9", "curious": "#90d5e8", "encouraging": "#8fd5b0",
+                  "playful": "#ffaacc", "cheerful": "#ffc779", "calm": "#7fc6d9"}
+        self.accent = parse_color(colors.get(self.pet_mood, "#7fc6d9"))
+        self.setToolTip(f"{self.persona_name} · {PET_LABELS.get(self.pet_mood, '平静')}\n"
+                        "点头部摸头 · 点脸颊戳脸 · 点嘴巴投喂\n长按拥抱 · 双击聊天 · 滚轮缩放")
+        if self.live2d_view is not None and previous_mood != self.pet_mood:
+            self.live2d_view.react("head" if self.pet_mood in {"cheerful", "playful"} else "hold")
         self.update()
 
     def _load_skin(self, *, force: bool = False) -> None:
@@ -506,6 +568,12 @@ class PetWindow(QWidget):
         path = None
         try:
             path = self.settings.skin_for(self.persona_id)
+            if not (self.settings.get("skins") or {}).get(self.persona_id):
+                from pet.skin import builtin_skin_path
+                persona = next((p for p in self.personas if p.get("id") == self.persona_id), {})
+                bundled = builtin_skin_path(persona.get("skin_id", ""))
+                if bundled:
+                    path = str(bundled)
         except Exception as exc:  # noqa: BLE001 - a broken setting must not kill the pet
             log.warning("could not resolve pet skin", extra={"error": str(exc)})
         same_path = path == self.skin_path
@@ -536,6 +604,10 @@ class PetWindow(QWidget):
         if builtin_skin_path(skin_id) is None:
             self.bubble.show_text("这款内置形象暂时不可用", autohide_s=4)
             return
+        if skin_id != self.persona_id:
+            self.select_persona(skin_id)
+            if self.persona_id != skin_id:
+                return
         self.settings.set_skin(self.persona_id, f"builtin:{skin_id}")
         self._load_skin(force=True)
         self._affection = 1.0
@@ -608,6 +680,9 @@ class PetWindow(QWidget):
         collide, so the same guard is claimed before the switch and the old one released
         after it.
         """
+        if self._chat_busy:
+            self.bubble.show_text("请等这句话回复完再切换角色。", autohide_s=4)
+            return
         if not persona_id or persona_id == self.persona_id:
             return
         label = self._persona_label(persona_id)
@@ -621,9 +696,15 @@ class PetWindow(QWidget):
             single_instance.release(previous)
         self._guard_key = persona_id
 
+        self._voice_epoch += 1
+        self.awareness.interact()
+        self._action_epoch += 1
+        self.player.stop()
         self.persona_id = persona_id
         self._apply_persona()
-        self.bubble.show_text(f"已切换到「{self.persona_name}」", autohide_s=4)
+        self._apply_emotion({})
+        persona = next((p for p in self.personas if p["id"] == persona_id), {})
+        self.bubble.show_text(persona.get("greeting") or f"已切换到「{self.persona_name}」", autohide_s=8)
 
     # -- animation ---------------------------------------------------------------------
     def _tick(self) -> None:
@@ -643,12 +724,25 @@ class PetWindow(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        painter.scale(self.scale_factor, self.scale_factor)
         rect = QRectF(6, 6, PET_SIZE - 12, PET_SIZE - 26)
-        if self.skin_pixmap is not None:
+        if self.live2d_view is not None and self.live2d_view.isVisible():
+            painter.setPen(QColor("#f0eef8"))
+            painter.setFont(QFont("Microsoft YaHei UI", 8))
+            painter.drawText(QRectF(4, PET_SIZE * .76, PET_SIZE - 8, 16), Qt.AlignCenter, self.persona_name)
+        elif self.skin_pixmap is not None:
             self._draw_skin(painter, rect)
         else:
             self._draw_character(painter, rect, mood=self.state)
         self._draw_mic(painter)
+        if hasattr(self, "awareness"):
+            painter.setPen(QColor("#cce9dd") if self.awareness.enabled and self.awareness.scene != "quiet" else QColor("#bbbbbb"))
+            font = QFont("Microsoft YaHei UI")
+            font.setPointSizeF(7.5)
+            painter.setFont(font)
+            painter.setBrush(QColor(30, 33, 45, 200))
+            painter.drawRoundedRect(QRectF(4, PET_SIZE - 33, 78, 30), 6, 6)
+            painter.drawText(QRectF(5, PET_SIZE - 33, 76, 30), Qt.AlignCenter, self.asmr.label if self.asmr.active else self.awareness.label.replace(" · ", "\n"))
         if self.hands_free:
             painter.setPen(QPen(QColor(120, 230, 170, 220), 2))
             painter.drawText(QRectF(0, PET_SIZE - 20, PET_SIZE, 16), Qt.AlignCenter, "一直听着")
@@ -688,12 +782,16 @@ class PetWindow(QWidget):
         painter.save()
         hop = math.sin((1.0 - self._affection) * math.pi) * 7 * self._affection
         painter.translate(target.center().x(), target.bottom() - hop)
-        sway = math.sin(self._phase * 0.7) * 1.8 - self._hover_amount * 3
+        energy = {"cheerful": 1.4, "playful": 1.6, "caring": 0.55, "calm": 0.8}.get(self.pet_mood, 1.0)
+        sway = math.sin(self._phase * 0.7) * 1.8 * energy - self._hover_amount * 3
         if self.state == "speaking":
             sway += math.sin(self._phase * 3.2) * 1.5
         painter.rotate(sway)
-        breath = 1 + math.sin(self._phase) * 0.008
+        breath = 1 + math.sin(self._phase) * 0.008 * energy
         painter.scale(1 + self._hover_amount * 0.025, breath)
+        # Reuse the exact painting transform for mouse hit tests at every zoom level.
+        self._sprite_transform = painter.worldTransform()
+        self._sprite_size = (width, height)
         painter.drawPixmap(QRectF(-width / 2, -height, width, height), pixmap, QRectF(pixmap.rect()))
         painter.restore()
 
@@ -721,7 +819,8 @@ class PetWindow(QWidget):
         font = QFont("Microsoft YaHei UI")
         font.setPointSizeF(9.5)
         painter.setFont(font)
-        label = painter.fontMetrics().elidedText(self.persona_name, Qt.ElideRight, int(rect.width() - 30))
+        from core.emotion import PET_LABELS
+        label = painter.fontMetrics().elidedText(f"{self.persona_name} · {PET_LABELS.get(self.pet_mood, '平静')}", Qt.ElideRight, int(rect.width() - 20))
         tag_width = painter.fontMetrics().horizontalAdvance(label) + 16
         tag = QRectF(rect.center().x() - tag_width / 2, rect.bottom() - 29, tag_width, 18)
         painter.setPen(Qt.NoPen)
@@ -845,7 +944,8 @@ class PetWindow(QWidget):
 
     def _draw_mic(self, painter: QPainter) -> None:
         radius = 17.0
-        center = QPoint(int(self.width() / 2), int(self.height() - 17))
+        # All drawing and hit testing share the unscaled 210px design coordinates.
+        center = QPoint(PET_SIZE // 2, PET_SIZE - 17)
         self._mic_rect = QRectF(center.x() - radius, center.y() - radius, radius * 2, radius * 2)
         active = self._recording
         painter.setBrush(QBrush(QColor(255, 92, 122, 235) if active else QColor(30, 33, 45, 210)))
@@ -866,37 +966,160 @@ class PetWindow(QWidget):
         self._hovered = False
         super().leaveEvent(event)
 
-    def mousePressEvent(self, event) -> None:  # noqa: N802
+    def mousePressEvent(self, event) -> None:
+        self.awareness.interact()
         if event.button() == Qt.LeftButton:
+            self._click_timer.stop()
             self._press_pos = event.position().toPoint()
             self._press_moved = False
-            if self._mic_rect.contains(event.position()):
+            self._held = False
+            point = event.position() / self.scale_factor
+            self._press_mic = self._mic_rect.contains(point)
+            if self._press_mic:
                 self.start_recording()
             else:
-                self.bubble.input.hide()
+                self._touch_kind = self._touch_at(point)
+                if self._touch_kind is None:
+                    self._press_pos = None
+                    return
+                self._hold_timer.start(650)
         super().mousePressEvent(event)
 
-    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+    def mouseMoveEvent(self, event) -> None:
+        if self.live2d_view is not None:
+            self.live2d_view.look_at(event.position().x(), event.position().y())
         if self._press_pos is not None and event.buttons() & Qt.LeftButton and not self._recording:
             delta = event.position().toPoint() - self._press_pos
-            if delta.manhattanLength() > 4:
+            if delta.manhattanLength() > QApplication.startDragDistance():
                 self._press_moved = True
+                self._hold_timer.stop()
+                self._click_timer.stop()
             if self._press_moved:
                 self.move(self.pos() + delta)
         super().mouseMoveEvent(event)
 
-    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+    def mouseReleaseEvent(self, event) -> None:
+        self._hold_timer.stop()
         if event.button() == Qt.LeftButton:
             if self._recording:
                 self.stop_recording_and_send()
-            elif not self._press_moved:
+            elif self._press_pos is not None and not self._press_moved and not self._held and not getattr(self, "_press_mic", False):
                 self._affection = 1.0
-                self.bubble.ask()
+                self._click_timer.start(QApplication.doubleClickInterval())
+            elif self._press_moved:
+                self._clamp_to_screen()
             self._press_pos = None
         super().mouseReleaseEvent(event)
 
-    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
-        self.open_web_ui()
+    def mouseDoubleClickEvent(self, event) -> None:
+        point = event.position() / self.scale_factor
+        if (event.button() == Qt.LeftButton and not self._mic_rect.contains(point)
+                and self._touch_at(point) is not None):
+            self._click_timer.stop()
+            self._hold_timer.stop()
+            self._held = True
+            self.touch("double")
+            self.bubble.ask()
+        event.accept()
+
+    def wheelEvent(self, event) -> None:
+        delta = event.pixelDelta().y() / 45 if event.pixelDelta().y() else event.angleDelta().y() / 120
+        if delta:
+            # Keep the point under the pointer fixed while smoothly approaching the target.
+            self._scale_anchor = (event.globalPosition(), event.position() / self.scale_factor)
+            self._scale_target = max(MIN_SCALE, min(MAX_SCALE, self._scale_target + delta * 0.02))
+            self._scale_timer.start()
+            self._scale_save_timer.start(350)
+        event.accept()
+
+    def _animate_scale(self) -> None:
+        remaining = self._scale_target - self.scale_factor
+        value = self._scale_target if abs(remaining) < 0.0008 else self.scale_factor + remaining * 0.28
+        self._apply_scale(value, anchor=self._scale_anchor)
+        if value == self._scale_target:
+            self._scale_timer.stop()
+
+    def _touch_at(self, point):
+        if self.skin_pixmap is not None and hasattr(self, "_sprite_transform") and self.live2d_view is None:
+            inverse, valid = self._sprite_transform.inverted()
+            if valid:
+                local = inverse.map(point * self.scale_factor)
+                width, height = self._sprite_size
+                x, y = (local.x() + width / 2) / width, (local.y() + height) / height
+                image = self.skin_pixmap.toImage()
+                if not (0 <= x < 1 and 0 <= y < 1) or image.pixelColor(int(x * image.width()), int(y * image.height())).alpha() < 20:
+                    return None
+                mouth_x, mouth_y = {"sakura_cat": (0.52, 0.38), "mint_bunny": (0.52, 0.425),
+                                    "luna_witch": (0.44, 0.39)}.get(self.persona_id, (0.5, 0.4))
+                if abs(x - mouth_x) < 0.055 and abs(y - mouth_y) < 0.045:
+                    return "feed"
+                return "head" if y < mouth_y - 0.1 else "face" if y < mouth_y + 0.07 else "body"
+        if point.y() < 65:
+            return "head"
+        # The mouth is a small central target; cheeks remain on either side.
+        if 90 <= point.x() <= 120 and 90 <= point.y() <= 112:
+            return "feed"
+        return "face" if point.y() < 108 else "body"
+
+    def _hold_touch(self) -> None:
+        if self._press_pos is not None and not self._press_moved:
+            self._held = True
+            self.touch("hold")
+
+    def touch(self, kind: str) -> None:
+        if self.state in {"thinking", "speaking"} or self._recording:
+            return
+        persona = next((p for p in self.personas if p.get("id") == self.persona_id), {})
+        if not persona:
+            from persona.catalog import CATALOG
+            persona = CATALOG.get(self.persona_id, {})
+        line = persona.get("options", {}).get("touch", {}).get(kind, "我在这里，陪你一起休息一会儿。")
+        self._affection = 1.0
+        self.bubble.show_text(line, autohide_s=5)
+        self.pet_mood = "playful" if kind in {"face", "feed", "double"} else "caring" if kind == "hold" else "cheerful"
+        if self.live2d_view is not None:
+            self.live2d_view.react(kind)
+        # Limit repeated taps; they must not queue many audio requests.
+        if not self.muted and time.monotonic() - self._last_touch_at > 3:
+            self._last_touch_at = time.monotonic()
+            self.speak(line)
+
+    def set_scale(self, value, *, persist=True) -> None:
+        try:
+            scale = float(value)
+            if not math.isfinite(scale):
+                scale = 1.0
+        except (TypeError, ValueError):
+            scale = 1.0
+        self._scale_timer.stop()
+        self._scale_save_timer.stop()
+        self._scale_target = max(MIN_SCALE, min(MAX_SCALE, scale))
+        self._apply_scale(self._scale_target)
+        if persist:
+            self.settings.set("scale", self._scale_target)
+
+    def _apply_scale(self, scale, *, anchor=None) -> None:
+        bottom_right = self.geometry().bottomRight()
+        self.scale_factor = max(MIN_SCALE, min(MAX_SCALE, scale))
+        size = round(PET_SIZE * self.scale_factor)
+        self.setFixedSize(size, size)
+        if anchor:
+            screen_point, local_point = anchor
+            self.move((screen_point - local_point * self.scale_factor).toPoint())
+        else:
+            self.move(bottom_right.x() - size + 1, bottom_right.y() - size + 1)
+        if self.live2d_view is not None:
+            self.live2d_view.setGeometry(0, 0, size, round(size * 0.76))
+        self._clamp_to_screen()
+        self.update()
+
+    def _clamp_to_screen(self) -> None:
+        screen = QApplication.screenAt(self.frameGeometry().center()) or QApplication.primaryScreen()
+        if screen:
+            area = screen.availableGeometry()
+            self.move(max(area.left(), min(self.x(), area.right() - self.width() + 1)),
+                      max(area.top(), min(self.y(), area.bottom() - self.height() + 1)))
+        self._reposition_bubble()
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
         if event.key() == Qt.Key_Space and event.modifiers() & Qt.ControlModifier:
@@ -931,6 +1154,7 @@ class PetWindow(QWidget):
 
     # -- voice -------------------------------------------------------------------------
     def start_recording(self) -> None:
+        self.asmr.stop()
         if self._recording or self.state == "thinking":
             return
         try:
@@ -971,34 +1195,54 @@ class PetWindow(QWidget):
     # -- chat --------------------------------------------------------------------------
     def send_text(self, text: str) -> None:
         text = (text or "").strip()
-        if not text:
+        if not text or self._chat_busy:
             return
+        if self.asmr.handle_command(text):
+            self.bubble.input.hide()
+            return
+        self.asmr.stop()
+        self._chat_busy = True
+        self.awareness.interact()
+        persona_id = self.persona_id
         self.bubble.input.hide()
         self.bubble.show_text(text)
         self._set_state("thinking")
         collected: List[str] = []
+        emotions = {}
 
         def work() -> str:
             final = ""
-            for event in self.client.chat_stream(text, persona_id=self.persona_id):
+            for event in self.client.chat_stream(text, persona_id=persona_id):
                 if event.kind == "text" and event.text:
                     collected.append(event.text)
+                elif event.kind == "emotion":
+                    emotions.update(event.data.get("emotion") or {})
                 elif event.kind == "done":
                     final = event.text or "".join(collected)
             return final or "".join(collected)
 
         def done(reply: str) -> None:
+            self._chat_busy = False
+            if self.persona_id == persona_id:
+                self._apply_emotion(emotions)
             self.bubble.show_text(reply or "……")
             self._set_state("idle")
+            if reply and self.persona_id == persona_id:
+                self.plan_actions(reply)
             if reply and not self.muted:
                 self.speak(reply)
 
         self._run_async(work, done, self._on_error)
 
     def speak(self, text: str) -> None:
+        if self.asmr.active:
+            return
+        persona_id, epoch = self.persona_id, self._voice_epoch
         def work() -> int:
             count = 0
-            for audio, _meta in self.client.speak_stream(text, persona_id=self.persona_id):
+            for audio, _meta in self.client.speak_stream(text, persona_id=persona_id):
+                if epoch != self._voice_epoch or self.muted:
+                    break
                 self.player.enqueue(audio)
                 count += 1
             return count
@@ -1006,6 +1250,7 @@ class PetWindow(QWidget):
         self._run_async(work, lambda _n: None, lambda exc: log.warning("speech failed", extra={"error": str(exc)}))
 
     def _on_error(self, exc: Exception) -> None:
+        self._chat_busy = False
         message = str(exc)
         if isinstance(exc, BackendError):
             self.bubble.show_text(message, autohide_s=10)
@@ -1021,6 +1266,8 @@ class PetWindow(QWidget):
         The decision logic lives in :mod:`pet.hands_free` (and is unit-tested there); this
         method only starts/stops the machinery and tells the user what happened.
         """
+        if not self.hands_free:
+            self.asmr.stop()
         self.hands_free = not self.hands_free
         if self.hands_free:
             self._hands_free_hint_shown = False
@@ -1128,8 +1375,26 @@ class PetWindow(QWidget):
         self.recorder.retain_last(0.3)
 
     # -- menu / tray -------------------------------------------------------------------
-    def _menu(self) -> QMenu:
+    def _menu(self, *, from_pet: bool = False) -> QMenu:
         menu = QMenu(self)
+        self.asmr.add_menu(menu)
+        scenes = menu.addMenu("陪伴场景")
+        from core.companion import SCENES
+        for scene, spec in SCENES.items():
+            action = scenes.addAction(spec["label"])
+            action.setCheckable(True)
+            action.setChecked(self.awareness.scene == scene)
+            action.triggered.connect(lambda checked=False, value=scene: self.awareness.set_scene(value))
+        aware = menu.addAction("主动感知（屏幕 / 活动 / 媒体）")
+        aware.setCheckable(True)
+        aware.setChecked(self.awareness.enabled)
+        aware.triggered.connect(self.awareness.set_enabled)
+        screen_action = menu.addAction("允许观察当前窗口画面（仅本机模型）")
+        screen_action.setCheckable(True)
+        screen_action.setChecked(self.awareness.screen_enabled)
+        screen_action.triggered.connect(self.awareness.toggle_screen)
+        menu.addAction("感知状态 / 隐私说明").triggered.connect(self.show_awareness)
+        menu.addSeparator()
         type_action = QAction("打字聊天", menu)
         type_action.triggered.connect(self.bubble.ask)
         menu.addAction(type_action)
@@ -1152,10 +1417,27 @@ class PetWindow(QWidget):
             action.triggered.connect(lambda _checked=False, name=key: self.set_sensitivity(name))
             sensitivity_menu.addAction(action)
 
+        size_menu = menu.addMenu("桌宠大小（也可滚轮缩放）")
+        for value in (0.35, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0):
+            action = size_menu.addAction(f"{value:.0%}")
+            action.setCheckable(True)
+            action.setChecked(abs(self.scale_factor - value) < 0.01)
+            action.triggered.connect(lambda checked=False, v=value: self.set_scale(v))
+        menu.addAction("角色介绍 / 初始记忆").triggered.connect(self.show_introduction)
+        menu.addAction("角色音色 / 参考音频…").triggered.connect(self.configure_voice)
+        menu.addAction("模型调用：本地部署 / 外部 API…").triggered.connect(self.configure_model_connection)
+        live_menu = menu.addMenu("Live2D")
+        live_menu.addAction("为当前角色导入模型…").triggered.connect(self.choose_live2d)
+        live_menu.addAction("恢复角色立绘").triggered.connect(self.clear_live2d)
+
         # -- 底座模型 --
         model_menu = menu.addMenu("底座模型")
+        if self.runtime_migration and (self.runtime_migration.get("state") != "ready" or self.model_connection.get("backend") != "vllm"):
+            pending = model_menu.addAction("vLLM 迁移：" + self.runtime_migration.get("detail", "等待安装"))
+            pending.setEnabled(False)
+            model_menu.addAction("重启电脑后：继续安装 vLLM").triggered.connect(self.resume_vllm_install)
         if not self.model_tiers:
-            loading = QAction("（正在读取…）", model_menu)
+            loading = QAction("外部 API 模式" if self.model_connection.get("mode") == "api" else "（正在读取…）", model_menu)
             loading.setEnabled(False)
             model_menu.addAction(loading)
         else:
@@ -1167,7 +1449,7 @@ class PetWindow(QWidget):
                 action = QAction(label, model_menu)
                 action.setCheckable(True)
                 action.setChecked(bool(tier.get("current")))
-                action.setEnabled(downloaded and not self._switching_model)
+                action.setEnabled(downloaded and tier.get("runnable", True) and not self._switching_model)
                 if not downloaded:
                     action.setText(f"{label}　（未下载）")
                 action.triggered.connect(
@@ -1219,18 +1501,6 @@ class PetWindow(QWidget):
         mute.triggered.connect(self._toggle_mute)
         menu.addAction(mute)
 
-        persona_menu = menu.addMenu("切换人设")
-        for persona in self.personas:
-            action = QAction(f"{persona.get('avatar', '')} {persona.get('name', persona.get('id'))}", persona_menu)
-            action.setCheckable(True)
-            action.setChecked(persona.get("id") == self.persona_id)
-            action.triggered.connect(lambda _checked=False, pid=persona.get("id"): self.select_persona(str(pid)))
-            persona_menu.addAction(action)
-        if not self.personas:
-            empty = QAction("（还没连上服务）", persona_menu)
-            empty.setEnabled(False)
-            persona_menu.addAction(empty)
-
         menu.addSeparator()
         # 「启动本地服务」原来是个常驻项，而且不看状态就无条件跑 start-all.ps1 —— 用户的
         # 反馈很准：「本身就是错误的，而且很多余」。正常入口是双击 启动聊天机器人.exe，
@@ -1249,9 +1519,10 @@ class PetWindow(QWidget):
         reconnect.triggered.connect(self.refresh_personas)
         menu.addAction(reconnect)
 
-        web = QAction("打开完整界面", menu)
-        web.triggered.connect(self.open_web_ui)
-        menu.addAction(web)
+        if from_pet:
+            web = QAction("打开网页", menu)
+            web.triggered.connect(self.open_web_ui)
+            menu.addAction(web)
 
         hide = QAction("隐藏到托盘", menu)
         hide.triggered.connect(self.hide)
@@ -1260,10 +1531,14 @@ class PetWindow(QWidget):
         quit_action = QAction("退出桌宠", menu)
         quit_action.triggered.connect(self.quit)
         menu.addAction(quit_action)
+        stop_action = menu.addAction("退出并停止全部服务")
+        stop_action.triggered.connect(self.stop_all)
         return menu
 
     def _show_menu(self, position: QPoint) -> None:
-        self._menu().exec(self.mapToGlobal(position))
+        menu = self._menu(from_pet=True)
+        menu.exec(self.mapToGlobal(position))
+        menu.deleteLater()
 
     def _tray_activated(self, reason) -> None:  # noqa: ANN001
         if reason == QSystemTrayIcon.Trigger:
@@ -1282,6 +1557,8 @@ class PetWindow(QWidget):
             return self.client.models()
 
         def done(payload: Dict[str, Any]) -> None:
+            self.model_connection = dict(payload.get("connection") or {})
+            self.runtime_migration = dict(payload.get("runtime_migration") or payload.get("installation") or {})
             self.model_tiers = list(payload.get("tiers") or [])
             self.model_current = payload.get("current")
             self._switching_model = bool(payload.get("busy"))
@@ -1336,6 +1613,201 @@ class PetWindow(QWidget):
             autohide_s=8,
         )
 
+    def show_introduction(self) -> None:
+        persona = next((p for p in self.personas if p.get("id") == self.persona_id), {})
+        intro = persona.get("initial_memory") or persona.get("description") or "正在读取角色介绍…"
+        if self.persona_id in {"hiyori", "mao"}:
+            intro += "\n\n形象版权：Live2D Inc.，依官方免费素材与角色条款使用；本应用的陪伴设定为独立演绎。许可见 docs/Live2D资源许可.md。"
+        self.bubble.show_text(intro)
+
+    def resume_vllm_install(self):
+        import subprocess
+        from pet.settings import project_root
+        root = project_root()
+        def work():
+            with (root / "logs/vllm-install.log").open("ab") as log_file:
+                process = subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(root / "scripts/install-vllm.ps1")],
+                                         cwd=root, stdout=log_file, stderr=log_file, stdin=subprocess.DEVNULL,
+                                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            return process.returncode
+        self.bubble.show_text("正在准备 vLLM。安装进度记录在 logs/vllm-install.log；需要重启时会停止等待，不会自行重启电脑。", autohide_s=12)
+        def done(code):
+            self.bubble.show_text("vLLM 已安装并激活。" if code == 0 else ("请先重启 Windows，再使用此菜单继续安装。" if code == 3010 else "安装未完成，请查看 logs/vllm-install.log。"), autohide_s=12)
+            self.refresh_models()
+        self._run_async(work, done, self._on_error)
+
+    def configure_voice(self) -> None:
+        from PySide6.QtWidgets import QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QPushButton
+        persona = next((p for p in self.personas if p.get("id") == self.persona_id), None)
+        if not persona:
+            self.bubble.show_text("连接服务后即可设置角色音色。", autohide_s=5)
+            return
+        voice = dict(persona.get("voice") or {})
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"{self.persona_name}的音色")
+        dialog.setMinimumWidth(420)
+        layout = QFormLayout(dialog)
+        backend = QComboBox()
+        for label, key in (("神经语音（即用，需联网）", "edge"), ("IndexTTS2（本地参考音色）", "indextts"), ("GPT-SoVITS（本地角色音色）", "gpt_sovits")):
+            backend.addItem(label, key)
+        backend.setCurrentIndex(max(0, backend.findData(voice.get("backend", "edge"))))
+        voice_id = QLineEdit(voice.get("voice_id", "zh-CN-XiaoxiaoNeural"))
+        reference = QLineEdit(voice.get("reference_audio") or "")
+        transcript = QLineEdit(voice.get("reference_text") or "")
+        pick = QPushButton("选择参考音频…")
+        def choose():
+            path, _ = QFileDialog.getOpenFileName(dialog, "选择角色参考音频", "", "音频 (*.wav *.mp3 *.flac)")
+            if path:
+                reference.setText(path)
+        pick.clicked.connect(choose)
+        layout.addRow("语音路径", backend)
+        layout.addRow("神经音色名称", voice_id)
+        layout.addRow("参考音频", reference)
+        layout.addRow(pick)
+        layout.addRow("参考音频台词", transcript)
+        layout.addRow(QLabel("本地音色需要先安装并启动相应引擎。\n保留当前角色的语速、音高和情感设置。"))
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addRow(buttons)
+        if dialog.exec() == QDialog.Accepted:
+            voice.update(backend=backend.currentData(), voice_id=voice_id.text().strip(),
+                         reference_audio=reference.text().strip() or None,
+                         reference_text=transcript.text().strip() or None)
+            payload = dict(persona, voice=voice)
+            def done(_):
+                self._voice_epoch += 1
+                self.player.stop()
+                self.refresh_personas()
+                self.bubble.show_text("角色音色已保存，下次回复将使用新设置。", autohide_s=5)
+            self._run_async(lambda: self.client.update_persona(payload), done, self._on_error)
+        dialog.deleteLater()
+
+    def configure_model_connection(self) -> None:
+        from PySide6.QtWidgets import QComboBox, QDialog, QDialogButtonBox, QFormLayout
+        dialog = QDialog(self)
+        dialog.setWindowTitle("模型调用模式")
+        dialog.setMinimumWidth(430)
+        layout = QFormLayout(dialog)
+        mode = QComboBox()
+        mode.addItem("本地部署（vLLM / 其他兼容服务）", "local")
+        mode.addItem("外部 API（兼容 Chat Completions）", "api")
+        current = self.model_connection
+        mode.setCurrentIndex(1 if current.get("mode") == "api" else 0)
+        url = QLineEdit(current.get("base_url") or "http://127.0.0.1:8080/v1")
+        model = QLineEdit(current.get("model") or "MiMo-V2.6-Distill-Qwen-9B-INT4-W4A16-AutoRound")
+        key = QLineEdit()
+        key.setEchoMode(QLineEdit.Password)
+        key.setPlaceholderText("同一地址留空保留已保存的密钥")
+        def preset(index):
+            url.setText("http://127.0.0.1:8080/v1" if index == 0 else "")
+            model.setText("MiMo-V2.6-Distill-Qwen-9B-INT4-W4A16-AutoRound" if index == 0 else "")
+            key.clear()
+        mode.currentIndexChanged.connect(preset)
+        layout.addRow("调用模式", mode)
+        layout.addRow("接口根地址（含 /v1）", url)
+        layout.addRow("模型名称", model)
+        layout.addRow("API Key", key)
+        note = QLabel("外部 API 会发送聊天上下文和本轮召回记忆；语音仍使用角色音色。\n本地服务需先启动；保存后新对话立即使用该连接。")
+        note.setWordWrap(True)
+        layout.addRow(note)
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addRow(buttons)
+        if dialog.exec() == QDialog.Accepted:
+            values = {"mode": mode.currentData(), "base_url": url.text().strip(),
+                      "model": model.text().strip(), "api_key": key.text()}
+            def done(payload):
+                self.model_connection = payload["connection"]
+                self.bubble.show_text("模型连接已保存。可以开始聊天了。", autohide_s=5)
+                self.refresh_models()
+            self._run_async(lambda: self.client.set_model_connection(values), done, self._on_error)
+        dialog.deleteLater()
+
+    def _load_live2d(self) -> None:
+        path = (self.settings.get("live2d_models") or {}).get(self.persona_id)
+        if path == self._live2d_path:
+            return
+        if self.live2d_view is not None:
+            self.live2d_view.release()
+            self.live2d_view = None
+        self._live2d_path = path
+        if not path:
+            return
+        try:
+            from pet.live2d import create_view, validate_model
+            valid = validate_model(path)
+            self.live2d_view = create_view(self, valid, self._live2d_failed)
+            self.live2d_view.setGeometry(0, 0, self.width(), round(self.height() * 0.76))
+            self.live2d_view.show()
+        except Exception as exc:
+            self._live2d_failed(str(exc))
+
+    def _live2d_ready(self):
+        if self.live2d_view and not self.live2d_view.failed:
+            pixmap = QPixmap.fromImage(self.live2d_view.grabFramebuffer())
+            if not pixmap.isNull():
+                icon = QIcon(pixmap)
+                self.setWindowIcon(icon)
+                if self.tray:
+                    self.tray.setIcon(icon)
+
+    def plan_actions(self, text):
+        if not self.live2d_view or not self.live2d_view.capabilities:
+            return
+        self._action_epoch += 1
+        epoch, persona = self._action_epoch, self.persona_id
+        payload = {"text": text[:1000], "persona_id": persona or "", "capabilities": self.live2d_view.capabilities}
+        def work():
+            response = self.client._client.post("/api/pet/action", json=payload, timeout=12)
+            response.raise_for_status()
+            return response.json()
+        def done(plan):
+            if epoch == self._action_epoch and self.persona_id == persona and self.live2d_view:
+                self.live2d_view.set_plan(plan)
+        self._run_async(work, done, lambda exc: None)
+
+    def show_awareness(self):
+        from PySide6.QtWidgets import QMessageBox
+        QMessageBox.information(self, "感知状态", f"{self.awareness.label}\n最近判断：{self.awareness.last_reason}\n系统声音：{self.awareness.audio.status}\n\n"
+            "屏幕仅按间隔观察当前前台窗口的缩小截图，保存在内存中并仅发送本机模型。关闭开关立即停止后续采集并丢弃待返回结果。"
+            "输入活动只统计空闲时间、活动次数、鼠标移动及磁盘吞吐，不读取键入内容。"
+            "电影/音乐模式读取系统媒体标题、播放状态及扬声器输出的音量包络，不开启麦克风，不录制系统声音文件。"
+            "密码/银行等窗口标题会暂停采集，这不是完整的敏感内容识别；处理私密内容时请主动暂停感知。"
+            "观察与推测不写入聊天历史或长期记忆；屏幕情节不是你的真实情绪。每小时最多主动发言4次，勿扰模式完全暂停。")
+
+    def _live2d_failed(self, error) -> None:
+        if self.live2d_view is not None:
+            self.live2d_view.release()
+            self.live2d_view = None
+        self.bubble.show_text(f"Live2D 暂不可用，继续使用角色立绘。\n{error}\n运行库安装：pip install -r requirements-live2d.txt", autohide_s=12)
+        self.update()
+
+    def choose_live2d(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+        from pet.live2d import validate_model
+        path, _ = QFileDialog.getOpenFileName(self, f"为{self.persona_name}导入匹配的 Live2D 模型", "", "Cubism 模型 (*.model3.json)")
+        if not path:
+            return
+        try:
+            path = validate_model(path)
+        except Exception as exc:
+            self.bubble.show_text(str(exc), autohide_s=8)
+            return
+        models = dict(self.settings.get("live2d_models") or {})
+        models[self.persona_id] = path
+        self.settings.set("live2d_models", models)
+        self._live2d_path = None
+        self._load_live2d()
+
+    def clear_live2d(self) -> None:
+        models = dict(self.settings.get("live2d_models") or {})
+        models.pop(self.persona_id, None)
+        self.settings.set("live2d_models", models)
+        self._load_live2d()
+        self.update()
+
     def set_sensitivity(self, name: str) -> None:
         """Switch the hands-free noise threshold preset (tray menu)."""
         config = self.listener.set_sensitivity(name)
@@ -1347,7 +1819,9 @@ class PetWindow(QWidget):
         )
 
     def _toggle_mute(self) -> None:
+        self._voice_epoch += 1
         self.muted = not self.muted
+        self.settings.set("muted", self.muted)
         if self.muted:
             self.player.stop()
 
@@ -1404,6 +1878,10 @@ class PetWindow(QWidget):
 
     def quit(self) -> None:
         try:
+            self.asmr.stop()
+            self.awareness.close()
+            self._scale_save_timer.stop()
+            self.settings.set("scale", self._scale_target)
             self.player.stop()
             if self._recording:
                 self.recorder.stop()
@@ -1412,3 +1890,12 @@ class PetWindow(QWidget):
             if self.tray is not None:
                 self.tray.hide()
             QApplication.quit()
+
+    def stop_all(self) -> None:
+        from pet.bootstrap import stop_services
+        try:
+            stop_services()
+        except Exception as exc:
+            self._on_error(exc)
+            return
+        self.quit()

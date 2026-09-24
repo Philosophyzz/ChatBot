@@ -389,6 +389,7 @@ class VoiceSpec:
             "backend": self.backend,
             "voice_id": self.voice_id,
             "reference_audio": self.reference_audio,
+            "reference_text": self.reference_text,
             "speed": self.speed,
             "emotion": self.emotion,
             "emotion_alpha": self.emotion_alpha,
@@ -436,6 +437,8 @@ class Persona:
     greeting: str = ""
     avatar: str = "🙂"
     builtin: bool = True
+    skin_id: str = ""
+    initial_memory: str = ""
 
     def to_public(self) -> Dict[str, Any]:
         return {
@@ -452,6 +455,8 @@ class Persona:
             "greeting": self.greeting,
             "avatar": self.avatar,
             "builtin": self.builtin,
+            "skin_id": self.skin_id,
+            "initial_memory": self.initial_memory,
         }
 
 

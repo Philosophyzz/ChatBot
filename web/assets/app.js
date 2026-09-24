@@ -56,6 +56,9 @@ function closeAllModals() {
 }
 
 async function api(path, options = {}) {
+  if (options.body && typeof options.body === 'object' && !(options.body instanceof FormData)) {
+    options = {...options, body: JSON.stringify(options.body)};
+  }
   let response;
   try {
     response = await fetch(path, {
@@ -79,7 +82,8 @@ async function api(path, options = {}) {
 }
 
 const escapeHtml = (str) => String(str || '')
-  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
 function fmtTime(ts) {
   if (!ts) return '';
@@ -174,6 +178,9 @@ async function chatViaSse(payload) {
 
 function handleEvent(event) {
   switch (event.kind) {
+    case 'emotion':
+      if (state.memoryTab === 'emotion') loadMemory();
+      break;
     case 'session':
       state.sessionId = event.session.id;
       break;
@@ -653,8 +660,15 @@ function currentPersona() {
 }
 
 function applyPersonaBadge(persona) {
-  $('#persona-avatar').textContent = persona.avatar || '🙂';
+  $('#persona-avatar').innerHTML = personaArtwork(persona);
   $('#persona-name').textContent = persona.name || persona.id;
+}
+
+function personaArtwork(persona) {
+  const skins = ['sakura_cat', 'mint_bunny', 'luna_witch'];
+  return skins.includes(persona.skin_id)
+    ? `<img class="persona-art" src="/pet-assets/${persona.skin_id}.png" alt="${escapeHtml(persona.name)}">`
+    : escapeHtml(persona.avatar || '🌸');
 }
 
 async function loadPersonas() {
@@ -688,9 +702,10 @@ function renderPersonaList() {
     const item = document.createElement('div');
     item.className = `item ${persona.id === state.personaId ? 'active' : ''}`;
     item.innerHTML = `
-      <div class="title">${persona.avatar || '🙂'} ${escapeHtml(persona.name)}${persona.id === state.defaultPersonaId ? ' <span class="badge">默认</span>' : ''}</div>
+      <div class="title">${personaArtwork(persona)} ${escapeHtml(persona.name)}${persona.id === state.defaultPersonaId ? ' <span class="badge">默认</span>' : ''}</div>
       <div class="meta"><span>${escapeHtml(persona.description || '')}</span></div>
-      <div class="body">音色：${escapeHtml((persona.voice && persona.voice.voice_id) || '默认')} ｜ 情感：${escapeHtml((persona.voice && persona.voice.emotion) || 'neutral')}</div>`;
+      <div class="body">音色：${escapeHtml((persona.voice && persona.voice.voice_id) || '默认')} ｜ 情感：${escapeHtml((persona.voice && persona.voice.emotion) || 'neutral')}</div>
+      <details onclick="event.stopPropagation()"><summary>角色介绍 / 初始记忆</summary>${escapeHtml(persona.initial_memory || '')}</details>`;
     item.onclick = () => selectPersona(persona.id);
     const tools = document.createElement('div');
     tools.className = 'row';
@@ -712,24 +727,26 @@ async function selectPersona(personaId) {
   if (persona) applyPersonaBadge(persona);
   renderPersonaList();
   if (state.sessionId) {
-    await api(`/api/sessions/${state.sessionId}`, { method: 'DELETE' }).catch(() => {});
     state.sessionId = null;
     $('#messages').innerHTML = '';
   }
   if (persona && persona.greeting) {
     appendMessage('assistant', persona.greeting, { avatar: persona.avatar });
   }
-  toast(`已切换人设：${persona ? persona.name : personaId}`);
+  toast(`已更换角色：${persona ? persona.name : personaId}`);
 }
 
 function openPersonaModal(persona) {
   state.editingPersona = persona || null;
-  $('#persona-modal-title').textContent = persona ? `编辑人设：${persona.name}` : '新建人设';
+  $('#persona-modal-title').textContent = persona ? `编辑角色：${persona.name}` : '新建角色';
   $('#pf-id').value = persona ? persona.id : '';
   $('#pf-id').disabled = !!persona;
   $('#pf-name').value = persona ? persona.name : '';
   $('#pf-avatar').value = persona ? persona.avatar : '🙂';
   $('#pf-desc').value = persona ? persona.description : '';
+  $('#pf-skin').value = persona ? persona.skin_id : 'sakura_cat';
+  $('#pf-skin').disabled = Boolean(persona && persona.builtin);
+  $('#pf-memory').value = persona ? persona.initial_memory : '';
   $('#pf-greeting').value = persona ? persona.greeting : '';
   $('#pf-prompt').value = persona ? persona.system_prompt : '';
   $('#pf-temp').value = persona ? persona.temperature : 0.7;
@@ -743,6 +760,7 @@ function openPersonaModal(persona) {
   $('#pf-speed').value = voice.speed != null ? voice.speed : 1.0;
   $('#pf-pitch').value = voice.pitch_shift != null ? voice.pitch_shift : 0;
   $('#pf-ref').value = voice.reference_audio || '';
+  $('#pf-ref-text').value = voice.reference_text || '';
   $('#pf-delete').hidden = !persona || persona.builtin;
   setModalOpen($('#modal-persona'), true);
 }
@@ -753,6 +771,10 @@ async function savePersona() {
     name: $('#pf-name').value.trim() || id,
     avatar: $('#pf-avatar').value.trim() || '🙂',
     description: $('#pf-desc').value.trim(),
+    skin_id: $('#pf-skin').value,
+    initial_memory: $('#pf-memory').value.trim(),
+    options: (state.editingPersona || {}).options || {category: 'anime'},
+    memory_scope: (state.editingPersona || {}).memory_scope || 'global',
     greeting: $('#pf-greeting').value.trim(),
     system_prompt: $('#pf-prompt').value.trim(),
     temperature: parseFloat($('#pf-temp').value) || 0.7,
@@ -766,6 +788,7 @@ async function savePersona() {
       speed: parseFloat($('#pf-speed').value) || 1.0,
       pitch_shift: parseFloat($('#pf-pitch').value) || 0,
       reference_audio: $('#pf-ref').value.trim() || null,
+      reference_text: $('#pf-ref-text').value.trim() || null,
     },
   };
   if (!payload.system_prompt) { toast('系统提示词不能为空', 'error'); return; }
@@ -872,11 +895,54 @@ async function loadMemory() {
     if (state.memoryTab === 'items') await renderMemoryItems(box);
     else if (state.memoryTab === 'profile') await renderProfile(box);
     else if (state.memoryTab === 'graph') await renderGraph(box);
+    else if (state.memoryTab === 'emotion') await renderEmotions(box);
     else await renderHistory(box);
   } catch (err) {
     box.innerHTML = `<div class="empty">加载失败：${escapeHtml(err.message)}</div>`;
   }
-  prependMemoryNotice(box);
+  if (state.memoryTab !== 'emotion') prependMemoryNotice(box);
+}
+
+async function renderEmotions(box) {
+  const personaId = state.personaId || state.defaultPersonaId || '';
+  const data = await api(`/api/emotions?persona_id=${encodeURIComponent(personaId)}&limit=20`);
+  const labels = { user: data.user_labels || {}, pet: data.pet_labels || {} };
+  const sources = { user_explicit: '用户明确说明', text_context: '文字与近期对话推测',
+    companion_rule: '桌宠回应策略', companion_inference: '桌宠心情推测', unavailable: '本轮未取得有效判断' };
+  const score = v => v == null ? '未估计' : `${Math.round(v * 100)}%`;
+  const describe = (value, subject) => value
+    ? `${escapeHtml(labels[subject][value.label] || value.label)}<div class="meta">强度 ${score(value.intensity)} · 置信度 ${score(value.confidence)}</div>`
+    : '<span class="muted">尚未确定</span>';
+  const stamp = ts => new Date(ts * 1000).toLocaleString();
+  box.innerHTML = `<div class="empty emotion-notice">情绪来自对话中的线索，可以纠正。未知强度保留为空；用户情绪与桌宠心情分别记录。</div>`;
+  for (const [subject, title] of [['user', '用户当前情绪'], ['pet', '桌宠当前心情']]) {
+    const item = document.createElement('div');
+    item.className = 'item emotion-card';
+    const value = data[subject];
+    item.innerHTML = `<b>${title}</b><div class="body">${describe(value, subject)}</div>` +
+      (value ? `<div class="meta">${escapeHtml(sources[value.source] || value.source)} · ${stamp(value.updated_at)}</div>` : '');
+    box.appendChild(item);
+  }
+  const observations = document.createElement('details');
+  observations.open = true;
+  observations.innerHTML = '<summary>本轮与最近观察</summary>';
+  for (const observation of data.observations || []) {
+    const item = document.createElement('div'); item.className = 'item';
+    item.innerHTML = `<div class="meta">${stamp(observation.recorded_at)} · ${escapeHtml(sources[observation.method] || observation.method)}</div>` +
+      `<div>用户：${describe(observation.user, 'user')}</div><div>桌宠：${describe(observation.pet, 'pet')}</div>`;
+    observations.appendChild(item);
+  }
+  if (!(data.observations || []).length) observations.innerHTML += '<div class="empty">还没有情绪观察</div>';
+  box.appendChild(observations);
+  const snapshots = document.createElement('details');
+  snapshots.innerHTML = '<summary>消息保存时的快照</summary>';
+  for (const snapshot of data.snapshots || []) {
+    const item = document.createElement('div'); item.className = 'item';
+    item.innerHTML = `<div class="meta">${stamp(snapshot.recorded_at)} · ${snapshot.role === 'user' ? '用户消息' : '桌宠回复'}</div>` +
+      `<div>用户：${describe(snapshot.user, 'user')}</div><div>桌宠：${describe(snapshot.pet, 'pet')}</div>`;
+    snapshots.appendChild(item);
+  }
+  box.appendChild(snapshots);
 }
 
 // Shown above every memory view, always — including when the panel is full.
@@ -1146,6 +1212,20 @@ async function loadModels() {
   try {
     const data = await api('/api/models');
     state.models = data;
+    const connection = data.connection || {};
+    if (!$('#connection-url').matches(':focus') && !$('#connection-model').matches(':focus')) {
+      $('#connection-mode').value = connection.mode || 'local';
+      $('#connection-url').value = connection.base_url || '';
+      $('#connection-model').value = connection.model || '';
+    }
+    if (data.mode === 'api') {
+      current.textContent = `外部 API：${data.current}`;
+      select.innerHTML = '';
+      meta.textContent = '当前使用外部 API，无需加载本地权重。';
+      $('#btn-switch-model').disabled = true;
+      hint.classList.add('hidden');
+      return;
+    }
     const currentTier = (data.tiers || []).find((tier) => tier.current);
     current.textContent = currentTier
       ? `当前：${currentTier.id}`
@@ -1159,7 +1239,7 @@ async function loadModels() {
     }).join('');
     renderModelMeta();
     hint.classList.add('hidden');
-    $('#btn-switch-model').disabled = Boolean(data.busy);
+    if (data.busy) $('#btn-switch-model').disabled = true;
   } catch (err) {
     current.textContent = '读取失败';
     meta.textContent = err.message;
@@ -1206,6 +1286,20 @@ async function switchModel() {
     await loadModels();
     loadHealth();
   }
+}
+
+async function saveConnection() {
+  try {
+    await api('/api/models/connection', {method: 'PUT', body: {
+      mode: $('#connection-mode').value,
+      base_url: $('#connection-url').value.trim(),
+      model: $('#connection-model').value.trim(),
+      api_key: $('#connection-key').value,
+    }});
+    $('#connection-key').value = '';
+    await loadModels();
+    toast('模型连接已保存并生效');
+  } catch (err) { toast(`保存失败：${err.message}`, 'error'); }
 }
 
 /* ========================== 事件绑定 ========================== */
@@ -1289,6 +1383,7 @@ function bindEvents() {
       case 'memory-search': runMemorySearch(); break;
       case 'refresh-health': loadHealth(); break;
       case 'refresh-models': loadModels(); break;
+      case 'save-connection': saveConnection(); break;
       case 'switch-model': switchModel(); break;
       case 'toggle-debug':
         state.debug = !state.debug;

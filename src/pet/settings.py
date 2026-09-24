@@ -5,7 +5,7 @@ The pet is a thin client: it talks to the server over HTTP and deliberately does
 hands-free sensitivity, custom character images, mute state — is stored here, as one small
 JSON file, so it works the same whether the pet runs from source or from the packaged exe.
 
-Location: ``<project>\\data\\pet_settings.json``. Both the source run and ``dist\\ChatBotPet.exe``
+Location: ``<project>\\data\\pet_settings.json``. Both the source run and ``启动聊天机器人.exe``
 resolve to the same project root (see :func:`project_root`), so a skin chosen in one is visible
 in the other — and everything stays on D: as the user requires.
 """
@@ -37,6 +37,11 @@ DEFAULTS: Dict[str, Any] = {
     "default_skin": None,
     #: Last window position, so the pet comes back where the user left it.
     "position": None,
+    "scale": 1.0,
+    "live2d_models": {},
+    "awareness_enabled": True,
+    "screen_awareness": True,
+    "companion_scene": "normal",
 }
 
 
@@ -102,7 +107,14 @@ class PetSettings:
     def skin_for(self, persona_id: Optional[str]) -> Optional[str]:
         """Absolute path of the image to use for this persona, if any."""
         skins = self.values.get("skins") or {}
-        candidate = skins.get(persona_id) or self.values.get("default_skin")
+        from persona.catalog import CATALOG
+        key = persona_id
+        # Built-in companions always recover their matching outfit. Global legacy skins
+        # must not turn every new character into the same animal.
+        candidate = skins.get(key)
+        if not candidate and key in CATALOG:
+            candidate = f"builtin:{key}"
+        candidate = candidate or self.values.get("default_skin")
         if not candidate:
             return None
         if str(candidate).startswith("builtin:"):

@@ -340,3 +340,13 @@ function Show-Vram {
         Write-Warn2 "读取显存失败：$($_.Exception.Message)"
     }
 }
+
+function Get-ModelsRoot {
+    param([string]$Root)
+    $python = Get-Python -Root $Root
+    if (-not $python) { throw 'Python is required to resolve the configured model directory' }
+    $code = "import sys; from pathlib import Path; sys.path.insert(0,str(Path(sys.argv[1])/'src')); from core.config import load_config; print(load_config(Path(sys.argv[1])).paths.models_dir)"
+    $result = & $python -c $code $Root
+    if ($LASTEXITCODE -ne 0) { throw 'Could not read paths.models_dir' }
+    return ([string]($result | Select-Object -Last 1)).Trim()
+}

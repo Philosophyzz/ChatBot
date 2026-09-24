@@ -1,18 +1,8 @@
-﻿# 把桌宠打包成单文件 exe（dist\ChatBotPet.exe）
-#
-#   powershell -ExecutionPolicy Bypass -File scripts\build-pet.ps1
-#   powershell -ExecutionPolicy Bypass -File scripts\build-pet.ps1 -OneDir     # 目录版，启动更快
-#   powershell -ExecutionPolicy Bypass -File scripts\build-pet.ps1 -SkipIcon   # 不生成图标
-#
-# 说明：
-#  * 用 PyInstaller 打包，产物在 dist\；构建缓存也放在项目里（build\），不碰 C 盘。
-#  * exe 是**瘦客户端**：它需要本地服务在跑（8077）。桌宠右键菜单里有「启动本地服务」，
-#    所以即使后端没起也能自己拉起来，不需要先去开终端。
-#  * 图标由桌宠自己画出来（同样是代码生成，不引入美术资源）：先离屏渲染 PNG，再包成 ICO。
+﻿# 打包唯一的桌面启动程序到项目根目录；双击自动启动服务和桌宠。
 [CmdletBinding()]
 param(
     [string]$Root,
-    [string]$Name = 'ChatBotPet',
+    [string]$Name = '启动聊天机器人',
     [switch]$OneDir,
     [switch]$SkipIcon,
     [switch]$Console,
@@ -47,37 +37,27 @@ if (-not $SkipIcon) {
     $iconPath = ''
 }
 
-if ($Clean) {
-    foreach ($dir in 'build', 'dist') {
-        $path = Join-Path $ProjectRoot $dir
-        if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force; Write-Ok "已清理 $dir" }
-    }
-}
-
-# 正在运行的桌宠会**锁住** dist\ChatBotPet.exe：PyInstaller 一路跑完，最后 os.remove
-# 覆盖产物时才报"拒绝访问"，等于白等十分钟。所以打包前先把它关掉（这是你要重建的程序，
-# 关掉它是预期行为，但要说清楚，别让人以为桌宠自己消失了）。
-$runningPets = Get-Process -Name $Name -ErrorAction SilentlyContinue
-if ($runningPets) {
-    Write-Step "先关掉正在运行的桌宠（$($runningPets.Count) 个）—— 它锁着 dist\$Name.exe，不关会打包失败"
-    $runningPets | Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 2
-}
+# --clean cleans PyInstaller's cache; do not recursively delete project directories.
+$artifact = if ($OneDir) { Join-Path $ProjectRoot "$Name\$Name.exe" } else { Join-Path $ProjectRoot "$Name.exe" }
+$runningPets = @(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $artifact })
+foreach ($petProcess in $runningPets) { Stop-Process -Id $petProcess.ProcessId -Force -ErrorAction SilentlyContinue }
 
 Write-Step "打包 $Name.exe（单文件约 60~90MB，首次需要几分钟）"
 $windowMode = if ($Console) { '--console' } else { '--windowed' }
 $pyiArgs = @(
     '-m', 'PyInstaller',
     '--noconfirm',
+    '--clean',
     $windowMode,                                    # 默认不弹控制台窗口
     '--name', $Name,
-    '--distpath', (Join-Path $ProjectRoot 'dist'),
+    '--distpath', $ProjectRoot,
     '--workpath', (Join-Path $ProjectRoot 'build'),
     '--specpath', (Join-Path $ProjectRoot 'build'),
     '--paths', (Join-Path $ProjectRoot 'src'),      # core / pet 包在 src 下
     '--hidden-import', 'pet',
     '--hidden-import', 'pet.window',
     '--hidden-import', 'pet.client',
+    '--hidden-import', 'pet.bootstrap',
     '--hidden-import', 'pet.audio',
     # pet.single_instance 是函数内 import（只在启动/切人设时才用到），显式声明免得
     # 打出来的 exe 少了单实例守卫 —— 那样双击两次就会开出两只一模一样的桌宠。
@@ -87,6 +67,14 @@ $pyiArgs = @(
     '--hidden-import', 'pet.hands_free',
     '--hidden-import', 'pet.skin',
     '--hidden-import', 'pet.settings',
+    '--hidden-import', 'pet.live2d',
+    '--hidden-import', 'pet.awareness',
+    '--hidden-import', 'pet.asmr',
+    '--hidden-import', 'speech.asmr',
+    '--hidden-import', 'core.companion',
+    '--collect-all', 'winsdk',
+    '--collect-all', 'pyaudiowpatch',
+    '--hidden-import', 'persona.catalog',
     # 录音和播放在函数里延迟导入，必须显式打进桌宠。
     '--hidden-import', 'sounddevice',
     '--hidden-import', 'soundfile',
@@ -138,6 +126,12 @@ Write-Ok "已排除 $($heavyExcludes.Count) 个桌宠用不到的重量级依赖
 #   sqlite3/liblzma  → _sqlite3 / _lzma 同理，属于以后可能踩的坑，一起带上（几百 KB）
 $envRoot = Split-Path -Parent $py
 $libBin = Join-Path $envRoot 'Library\bin'
+# Qt's wheel can be newer than conda's root CRT. Bundle one matching CRT in the
+# extraction root so Windows cannot preload an older DLL with the same basename.
+$qtRuntime = Join-Path $envRoot 'Lib\site-packages\PySide6'
+foreach ($dll in Get-ChildItem -LiteralPath $qtRuntime -File | Where-Object { $_.Name -match '^(MSVCP140|VCRUNTIME140|CONCRT140).*\.dll$' }) {
+    $pyiArgs += @('--add-binary', "$($dll.FullName);.")
+}
 $runtimeDllPatterns = @(
     'libssl*.dll', 'libcrypto*.dll', 'libffi*.dll', 'ffi*.dll',
     'libexpat*.dll', 'sqlite3*.dll', 'liblzma*.dll', 'libbz2*.dll', 'zlib*.dll'
@@ -165,14 +159,26 @@ foreach ($need in $mustHave) {
     if (-not $hit) { Write-Warn2 "没有找到 $($need.Patterns -join ' / ') —— exe 启动时可能报 DLL load failed" }
 }
 
+& $py -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('live2d') else 1)"
+if ($LASTEXITCODE -eq 0) { $pyiArgs += @('--collect-all', 'live2d', '--hidden-import', 'PySide6.QtOpenGLWidgets') }
+
 if ($OneDir) { $pyiArgs += '--onedir' } else { $pyiArgs += '--onefile' }
 if ($iconPath) { $pyiArgs += @('--icon', $iconPath) }
 $pyiArgs += $entry
 
-& $py @pyiArgs
+# Restrict binary discovery to this interpreter and Windows. Unrelated tools on
+# PATH (e.g. Poppler) can contribute an incompatible icuuc.dll that shadows the
+# Windows ICU used by Qt6Core and makes the frozen pet fail before showing a window.
+$savedBuildPath = $env:PATH
+try {
+    $env:PATH = "$envRoot;$libBin;$qtRuntime;$env:SystemRoot\System32;$env:SystemRoot"
+    & $py @pyiArgs
+} finally {
+    $env:PATH = $savedBuildPath
+}
 if ($LASTEXITCODE -ne 0) { Write-Err2 '打包失败'; exit 1 }
 
-$exe = if ($OneDir) { Join-Path $ProjectRoot "dist\$Name\$Name.exe" } else { Join-Path $ProjectRoot "dist\$Name.exe" }
+$exe = if ($OneDir) { Join-Path $ProjectRoot "$Name\$Name.exe" } else { Join-Path $ProjectRoot "$Name.exe" }
 if (-not (Test-Path -LiteralPath $exe)) { Write-Err2 "没有找到产物 $exe"; exit 1 }
 
 $mb = [math]::Round((Get-Item -LiteralPath $exe).Length / 1MB, 1)
@@ -259,5 +265,5 @@ Write-Host ''
 Write-Host '============================================================' -ForegroundColor Green
 Write-Ok "已生成 $exe（$mb MB）"
 Write-Host ' 双击即可打开桌宠；它会显示在屏幕右下角，并出现在系统托盘里。'
-Write-Host ' 后端没跑时：双击 dist\启动聊天机器人.exe（服务没在运行时，桌宠右键菜单里也会多出一项）。'
+Write-Host ' 双击根目录启动聊天机器人.exe，会启动服务和桌宠；右键可退出并停止全部服务。'
 Write-Host '============================================================' -ForegroundColor Green

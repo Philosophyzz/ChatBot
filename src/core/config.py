@@ -8,8 +8,8 @@ Precedence (lowest to highest):
        (e.g. ``CHATBOT_LLM__TEMPERATURE=0.4``)
 
 Everything the system needs to locate on disk lives under :class:`Paths`, whose
-single root is the project directory. Model files are required to live under the
-project root (D: drive), which is enforced by :meth:`Paths.assert_on_project_root`.
+project root stores application data; paths.models_dir can keep all model files
+on a separate drive or directory.
 """
 
 from __future__ import annotations
@@ -73,14 +73,15 @@ class Paths:
 
     def __post_init__(self) -> None:
         root = Path(self.root)
+        models = Path(self.models_dir) if self.models_dir is not None else root / "models"
         derived = {
             "config_dir": root / "config",
             "data_dir": root / "data",
-            "models_dir": root / "models",
-            "gguf_dir": root / "models" / "gguf",
-            "tts_dir": root / "models" / "tts",
-            "voices_dir": root / "models" / "voices",
-            "cache_dir": root / "models" / "cache",
+            "models_dir": models,
+            "gguf_dir": models / "gguf",
+            "tts_dir": models / "tts",
+            "voices_dir": models / "voices",
+            "cache_dir": models / "cache",
             "logs_dir": root / "logs",
             "bin_dir": root / "bin",
             "venvs_dir": root / "venvs",
@@ -113,15 +114,12 @@ class Paths:
         }
 
     def assert_on_project_root(self, path: Path) -> Path:
-        """Fail loudly if a model path escapes the project root (the D: requirement)."""
+        """Accept paths within the project or configured model directory."""
         resolved = Path(path).resolve()
-        try:
-            resolved.relative_to(self.root)
-        except ValueError as exc:  # pragma: no cover - guard rail
+        if not any(resolved.is_relative_to(Path(base).resolve()) for base in (self.root, self.models_dir)):
             raise ValueError(
-                f"model path {resolved} is outside the project root {self.root}; "
-                "the deployment contract requires all model files on D:"
-            ) from exc
+                f"model path {resolved} is outside the configured model directory {self.models_dir}"
+            )
         return resolved
 
     @property
@@ -148,6 +146,7 @@ class Paths:
 
 @dataclass
 class LLMConfig:
+    mode: str = "local"  # local | api
     #: Which registered backend to use: "llamacpp" | "ollama" | "openai" | "mock".
     backend: str = "llamacpp"
     #: ``mock`` runs the whole app with a scripted model — no GPU, no download.
@@ -284,7 +283,7 @@ class AppConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
     extraction: ExtractionConfig = field(default_factory=ExtractionConfig)
     #: Registered persona used when a session does not name one.
-    default_persona: str = "sweet_companion"
+    default_persona: str = "sakura_cat"
     log_level: str = "INFO"
     #: Turn on to expose score breakdowns and retrieved memories in API responses.
     debug: bool = False
@@ -295,6 +294,7 @@ class AppConfig:
         """Redacted view for the settings endpoint (never leaks api_key)."""
         return {
             "llm": {
+                "mode": self.llm.mode,
                 "backend": self.llm.backend,
                 "base_url": self.llm.base_url,
                 "model": self.llm.model,
@@ -522,9 +522,11 @@ def load_config(root: Optional[Path] = None, overrides: Optional[Mapping[str, An
 
     # Scalars on the root object.
     if isinstance(merged.get("paths"), Mapping):
-        raw_root = merged["paths"].get("root")
-        if raw_root:
-            cfg.paths = Paths(root=Path(str(raw_root))).ensure()
+        raw_paths = merged["paths"]
+        path_values = {key: Path(str(value)) for key, value in raw_paths.items()
+                       if key in Paths.__dataclass_fields__ and value}
+        path_values.setdefault("root", cfg.paths.root)
+        cfg.paths = Paths(**path_values).ensure()
     top_scalars = {k: v for k, v in merged.items() if not isinstance(v, Mapping)}
     _apply_section(cfg, top_scalars)
 
@@ -535,6 +537,12 @@ def load_config(root: Optional[Path] = None, overrides: Optional[Mapping[str, An
     }
     if leftover:
         cfg.extra.update(leftover)
+    from persona.catalog import LEGACY_IDS
+    cfg.default_persona = LEGACY_IDS.get(cfg.default_persona, cfg.default_persona)
+    if cfg.llm.mode not in {"local", "api"}:
+        raise ConfigError("llm.mode 必须为 local 或 api")
+    if cfg.llm.mode == "api":
+        cfg.llm.backend = "openai"
     return cfg
 
 

@@ -5,12 +5,12 @@
   1. 找到项目根目录（exe 所在目录或其上一级，都可以）
   2. 检查后端是否已在运行 —— 已经在跑就直接进第 4 步，不会重复启动
   3. 调 scripts\\start-all.ps1 起模型服务与网页服务（输出原样显示，方便看进度）
-  4. 等 /api/health 就绪，打开浏览器
+  4. 等 /api/health 就绪，不自动打开浏览器
   5. 顺手把桌宠也拉起来（除非 -NoPet）
 
 参数（给愿意用命令行的人；双击时全部走默认）：
   --no-pet        只起服务，不开桌宠
-  --no-browser    不自动开浏览器
+  --no-browser    兼容旧参数；现在所有启动方式都不自动开浏览器
   --mock          演示模式：不加载模型，秒开（界面功能完整）
 """
 
@@ -23,7 +23,6 @@ import sys
 import time
 import urllib.error
 import urllib.request
-import webbrowser
 from pathlib import Path
 
 PORT = 8077
@@ -123,7 +122,7 @@ def run_script(root: Path, script: str, *args: str) -> int:
 
 
 def start_pet(root: Path) -> None:
-    pet = root / "dist" / "ChatBotPet.exe"
+    pet = root / "启动聊天机器人.exe"
     if not pet.is_file():
         print(f"  （没找到桌宠：{pet}，跳过）")
         return
@@ -151,7 +150,7 @@ def main(argv: list[str] | None = None) -> int:
     root = find_root(args.root)
     if root is None:
         print("  [X] 找不到项目根目录（应该包含 scripts\\start-all.ps1）")
-        print("      把本程序放回 D:\\Harness\\ChatBot\\dist\\ 下再运行，")
+        print("      把本程序放回 D:\\Harness\\ChatBot\\ 下再运行，")
         print("      或用 --root D:\\Harness\\ChatBot 指定。")
         pause()
         return 2
@@ -187,13 +186,6 @@ def main(argv: list[str] | None = None) -> int:
         print("  [OK] 服务已就绪")
 
     print("")
-    if not args.no_browser:
-        print("  打开网页界面…")
-        try:
-            webbrowser.open(APP_URL)
-        except Exception as exc:  # noqa: BLE001
-            print(f"  （自动打开浏览器失败：{exc} —— 手动访问 {APP_URL}）")
-
     if not args.no_pet:
         start_pet(root)
 
@@ -202,7 +194,7 @@ def main(argv: list[str] | None = None) -> int:
     print("  可以开始聊天了")
     print(f"    网页界面：{APP_URL}")
     print("    桌宠    ：按住麦克风按钮说话；右键打开菜单")
-    print(f"    停止服务：双击 {root / 'dist' / '停止聊天机器人.exe'}（或 scripts\\stop.ps1）")
+    print(f"    停止服务：双击 桌宠右键 → 退出并停止全部服务（或 scripts\\stop.ps1）")
     print("=" * 60)
     print("")
     print("  本窗口可以直接关掉 —— 服务和桌宠会继续在后台运行。")

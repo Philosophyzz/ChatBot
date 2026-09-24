@@ -5,7 +5,7 @@
 （光 `torch_cuda.dll` 就 981MB）。体积冒烟在 `scripts\\build-pet.ps1` 里已经卡了 400MB 上限，
 真被卡住时就用这个工具看是哪几个包在膨胀：
 
-    python tools\\exe_size_report.py                 # 读 build\\ChatBotPet\\Analysis-00.toc
+    python tools\\exe_size_report.py                 # 读 build\\启动聊天机器人\\Analysis-00.toc
     python tools\\exe_size_report.py --top 40
     python tools\\exe_size_report.py --contains torch
 
@@ -48,7 +48,7 @@ def _mentions(path: str, suspect: str) -> bool:
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="分析 PyInstaller 打包产物里的大块头")
-    parser.add_argument("--toc", default=r"build\ChatBotPet\Analysis-00.toc", help="Analysis TOC 路径")
+    parser.add_argument("--toc", default=r"build\启动聊天机器人\Analysis-00.toc", help="Analysis TOC 路径")
     parser.add_argument("--top", type=int, default=25, help="列出体积最大的多少条")
     parser.add_argument("--contains", default=None, help="只看路径里含这段文字的条目")
     args = parser.parse_args(argv)

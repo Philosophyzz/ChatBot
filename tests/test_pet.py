@@ -26,6 +26,14 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
+@pytest.fixture(autouse=True)
+def isolated_pet_settings(tmp_path, monkeypatch):
+    """GUI tests must neither read nor modify the user's saved desktop settings."""
+    from pet.settings import PetSettings
+    settings = PetSettings(tmp_path / "pet.json")
+    monkeypatch.setattr("pet.window.get_settings", lambda: settings)
+
+
 def _frame(tag: bytes, payload: bytes) -> bytes:
     return len(payload).to_bytes(4, "big") + tag + payload
 
@@ -66,10 +74,10 @@ class StubBackend(BaseHTTPRequestHandler):
                     {
                         "port": 8080,
                         "listening": True,
-                        "current": "fast-9b",
+                        "current": "Qwen3.5-9B-Q4_K_M",
                         "tiers": [
                             {
-                                "id": "fast-9b",
+                                "id": "Qwen3.5-9B-Q4_K_M",
                                 "label": "速度优先",
                                 "size_gb": 5.29,
                                 "downloaded": True,
@@ -82,7 +90,7 @@ class StubBackend(BaseHTTPRequestHandler):
                                 "download_command": "",
                             },
                             {
-                                "id": "quality-35b",
+                                "id": "Qwen3.6-35B-A3B-UD-IQ2_XXS",
                                 "label": "最强质量",
                                 "size_gb": 10.02,
                                 "downloaded": False,
@@ -92,7 +100,7 @@ class StubBackend(BaseHTTPRequestHandler):
                                 "n_gpu_layers": -1,
                                 "notes": "测试用",
                                 "server_args": ["--n-cpu-moe", "8"],
-                                "download_command": "powershell -File scripts\\download-models.ps1 -Tier quality-35b -Mirror",
+                                "download_command": "powershell -File scripts\\download-models.ps1 -Tier Qwen3.6-35B-A3B-UD-IQ2_XXS -Mirror",
                             },
                         ],
                         "gpu": {"total_mib": 16303, "free_mib": 2048},
@@ -625,7 +633,7 @@ def test_pet_menu_offers_model_switch_and_skin(tmp_path, stub_backend) -> None:
         app.processEvents()
         time.sleep(0.02)
     assert window.model_tiers, "应该从 /api/models 读到档位列表"
-    assert window.model_current == "fast-9b"
+    assert window.model_current == "Qwen3.5-9B-Q4_K_M"
 
     menu = window._menu()
     labels = [action.text() for action in menu.actions()]
@@ -634,11 +642,11 @@ def test_pet_menu_offers_model_switch_and_skin(tmp_path, stub_backend) -> None:
 
     model_menu = next(action.menu() for action in menu.actions() if action.text() == "底座模型")
     tier_labels = [action.text() for action in model_menu.actions()]
-    assert any("fast-9b" in label for label in tier_labels)
+    assert any("Qwen3.5-9B-Q4_K_M" in label for label in tier_labels)
     assert any("未下载" in label for label in tier_labels), "未下载的档位要标出来"
     enabled = {action.text(): action.isEnabled() for action in model_menu.actions()}
-    assert any("fast-9b" in text and ok for text, ok in enabled.items())
-    assert any("quality-35b" in text and not ok for text, ok in enabled.items()), "没下载的档位不该能点"
+    assert any("Qwen3.5-9B-Q4_K_M" in text and ok for text, ok in enabled.items())
+    assert any("Qwen3.6-35B-A3B-UD-IQ2_XXS" in text and not ok for text, ok in enabled.items()), "没下载的档位不该能点"
 
     skin_menu = next(action.menu() for action in menu.actions() if action.text() == "更换形象")
     assert any("选一张图片" in action.text() for action in skin_menu.actions())

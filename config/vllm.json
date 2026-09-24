@@ -1,0 +1,18 @@
+{
+  "distro": "ChatBot-vLLM",
+  "version": "0.30.0",
+  "python": "/opt/chatbot-vllm/bin/python",
+  "port": 8080,
+  "default_model": "MiMo-V2.6-Distill-Qwen-9B-INT4-W4A16-AutoRound",
+  "models": [
+    {
+      "id": "MiMo-V2.6-Distill-Qwen-9B-INT4-W4A16-AutoRound",
+      "path": "D:/Models/hf/MiMo-V2.6-Distill-Qwen-9B-INT4-W4A16-AutoRound",
+      "repo": "letechlead/MiMo-V2.6-Distill-Qwen-9B-INT4-W4A16-AutoRound",
+      "revision": "077b1bd6bbb0d4a6f14e29c897d9ac205ca37669",
+      "size_gb": 8.98,
+      "ctx": 8192,
+      "args": ["--dtype", "bfloat16", "--gpu-memory-utilization", "0.78", "--max-num-seqs", "1", "--max-num-batched-tokens", "2048", "--enforce-eager", "--limit-mm-per-prompt", "{\"image\":1,\"video\":0}", "--chat-template-kwargs", "{\"enable_thinking\":false}"]
+    }
+  ]
+}

@@ -28,6 +28,8 @@ DEFAULT_SIZE = 512
 
 # Lives inside the package so PyInstaller and source runs use the same assets.
 BUILTIN_SKINS = (
+    ("hiyori", "桃濑日和 · Live2D"),
+    ("mao", "虹色真央 · Live2D"),
     ("sakura_cat", "樱樱 · 猫耳团子"),
     ("mint_bunny", "薄荷 · 软软兔"),
     ("luna_witch", "露娜 · 星星魔女"),
@@ -152,7 +154,8 @@ def clear_skin(persona_id: Optional[str] = None, *, settings: Optional[PetSettin
     path = store.skin_for(persona_id) if stored else None
     store.set_skin(persona_id, None)
     remaining = [store.get("default_skin"), *(store.get("skins") or {}).values()]
-    if path and not str(stored).startswith("builtin:") and stored not in remaining:
+    bundled = Path(__file__).resolve().parent / "assets"
+    if path and not Path(path).resolve().is_relative_to(bundled) and not str(stored).startswith("builtin:") and stored not in remaining:
         try:
             Path(path).unlink()
             removed.append(Path(path))

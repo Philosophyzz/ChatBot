@@ -1,0 +1,27 @@
+# Extra packages for venvs/asmr, sharing the tested chatbot torch 2.8.0+cu128 runtime.
+# Install with --no-deps; scripts/install-asmr.ps1 checks the base runtime first.
+alias-free-torch==0.0.6
+clean-fid==0.1.35
+clip @ git+https://github.com/openai/CLIP.git@d05afc436d78f1c48dc0dbf8e5980a9d471f35f6
+dctorch==0.1.2
+decord==0.6.0
+descript-audio-codec==1.0.0
+einops-exts==0.0.4
+ftfy==6.3.1
+ImageIO==2.37.4
+jsonmerge==1.9.2
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+k-diffusion==0.1.1
+kornia==0.8.3
+local-attention==1.8.6
+referencing==0.37.0
+rpds-py==2026.6.3
+scikit-image==0.26.0
+tifffile==2026.3.3
+timm==1.0.30
+torchdiffeq==0.2.5
+torchsde==0.2.6
+trampoline==0.1.2
+vector-quantize-pytorch==1.9.14
+x-transformers==1.26.6

@@ -321,3 +321,8 @@ kbd {
   #composer { padding: 6px 12px 12px; }
   .grid2 { grid-template-columns: 1fr; }
 }
+/* The same transparent character artwork is used by the pet, tray and web. */
+.persona-art { width:42px; height:42px; object-fit:contain; vertical-align:middle; }
+.model-card label { display:block; margin-top:10px; }
+.model-card input, .model-card select { width:100%; box-sizing:border-box; }
+.item details { margin-top:10px; line-height:1.7; }

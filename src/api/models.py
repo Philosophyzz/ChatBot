@@ -50,6 +50,8 @@ class PersonaUpsertRequest(BaseModel):
     memory_scope: str = "global"
     options: Dict[str, Any] = Field(default_factory=dict)
     voice: Dict[str, Any] = Field(default_factory=dict)
+    skin_id: str = ""
+    initial_memory: str = Field("", max_length=4000)
 
 
 class MemoryUpdateRequest(BaseModel):

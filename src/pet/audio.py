@@ -189,6 +189,8 @@ class Player:
         self._thread: Optional[threading.Thread] = None
         self._queue: List[bytes] = []
         self.speaking = False
+        self._envelope = []
+        self._playback_started = 0.0
         self.on_state: Optional[Callable[[bool], None]] = None
 
     def enqueue(self, audio: bytes) -> None:
@@ -241,13 +243,25 @@ class Player:
                 if self._stop.is_set():
                     break
                 try:
+                    import numpy as np
+                    block = max(1, rate // 40)
+                    self._envelope = [min(1.0, float(np.sqrt(np.mean(samples[i:i + block] ** 2))) * 5)
+                                      for i in range(0, len(samples), block)]
+                    self._playback_started = time.monotonic()
                     sd.play(samples, rate)
                     sd.wait()
                 except Exception as exc:  # noqa: BLE001
                     log.warning("playback failed", extra={"error": str(exc)})
                     break
         finally:
+            self._envelope = []
             self._set_speaking(False)
+
+    @property
+    def level(self) -> float:
+        index = int((time.monotonic() - self._playback_started) * 40)
+        values = self._envelope
+        return values[index] if self.speaking and 0 <= index < len(values) else 0.0
 
     def _set_speaking(self, value: bool) -> None:
         self.speaking = value

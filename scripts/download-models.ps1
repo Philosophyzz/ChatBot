@@ -3,11 +3,11 @@
 #
 # 用法：
 #   powershell -ExecutionPolicy Bypass -File scripts\download-models.ps1
-#   powershell -ExecutionPolicy Bypass -File scripts\download-models.ps1 -Tier balanced-14b -Mirror
+#   powershell -ExecutionPolicy Bypass -File scripts\download-models.ps1 -Tier Qwen3.6-14B-A3B-FableVibes-Q4_K_M -Mirror
 #   powershell -ExecutionPolicy Bypass -File scripts\download-models.ps1 -List
 #
 # 参数：
-#   -Tier <id>     对话模型档位（quality-27b / balanced-14b / fast-9b）
+#   -Tier <id>     对话模型档位（Qwen3.6-27B-Q4_K_M-mtp / Qwen3.6-14B-A3B-FableVibes-Q4_K_M / Qwen3.5-9B-Q4_K_M）
 #   -Support       同时下载嵌入与重排模型（记忆检索质量更好）
 #   -Mirror        使用 hf-mirror.com 镜像（国内网络推荐）
 #   -All           下载全部档位
@@ -50,7 +50,7 @@ $code = $LASTEXITCODE
 
 if ($code -eq 0 -and -not $List) {
     Write-Step '校验下载结果'
-    $ggufDir = Join-Path $ProjectRoot 'models\gguf'
+    $ggufDir = Join-Path (Get-ModelsRoot -Root $ProjectRoot) 'gguf'
     if (Test-Path -LiteralPath $ggufDir) {
         $files = Get-ChildItem -LiteralPath $ggufDir -Filter '*.gguf' -ErrorAction SilentlyContinue
         if ($files) {

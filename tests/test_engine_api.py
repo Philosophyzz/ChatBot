@@ -23,7 +23,7 @@ def test_builtin_personas_have_voice_and_prompt(tmp_path) -> None:
     config = AppConfig(paths=Paths(root=tmp_path))
     manager = PersonaManager(config)
     personas = manager.list()
-    assert len(personas) >= 4
+    assert {p.id for p in personas} == {"sakura_cat", "mint_bunny", "luna_witch"}
     for persona in personas:
         assert persona.system_prompt.strip(), f"{persona.id} 缺少系统提示词"
         assert persona.voice.voice_id, f"{persona.id} 缺少音色"
@@ -406,8 +406,8 @@ def test_engine_switches_persona_and_voice(temp_config, mock_llm, run) -> None:
     result = run(scenario())
     persona_events = [event for event in result.events if event["kind"] == "start"]
     assert persona_events
-    assert persona_events[0]["persona"]["id"] == "calm_assistant"
-    assert persona_events[0]["persona"]["temperature"] == 0.4
+    assert persona_events[0]["persona"]["id"] == "luna_witch"
+    assert persona_events[0]["persona"]["temperature"] == 0.85
 
 
 def test_engine_trims_long_history_within_budget(temp_config, mock_llm, run) -> None:
@@ -618,7 +618,7 @@ def test_a_tier_exists_that_fits_entirely_in_vram(project_root) -> None:
 
     for tier in tiers:
         # Tier ids become llama-server --alias values, so they must be safe argv.
-        assert re.fullmatch(r"[a-z0-9][a-z0-9._-]*", tier["id"]), (
+        assert re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", tier["id"]), (
             f"档位 id {tier['id']!r} 含不适合做命令行别名的字符"
         )
         assert tier["ctx"] >= 4096, f"{tier['id']} 的上下文太小"
@@ -677,7 +677,7 @@ def test_api_health_and_plugins(api_client) -> None:
 def test_api_personas_and_sessions(api_client) -> None:
     body = api_client.get("/api/personas").json()
     personas = body["personas"]
-    assert len(personas) >= 4
+    assert {p["id"] for p in personas} == {"sakura_cat", "mint_bunny", "luna_witch"}
     # The UI needs the server to name the default: it cannot infer it from list order.
     assert body["default"] in [persona["id"] for persona in personas]
 

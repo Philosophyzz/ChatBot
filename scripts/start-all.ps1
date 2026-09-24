@@ -1,9 +1,9 @@
 ﻿# =============================================================================
-# 一键启动：模型服务 + 网页界面，并自动打开浏览器
+# 一键启动：模型服务 + 网页界面，浏览器仅由桌宠右键菜单打开
 #
 # 用法：
 #   powershell -ExecutionPolicy Bypass -File scripts\start-all.ps1
-#   powershell -ExecutionPolicy Bypass -File scripts\start-all.ps1 -Tier balanced-14b
+#   powershell -ExecutionPolicy Bypass -File scripts\start-all.ps1 -Tier Qwen3.6-14B-A3B-FableVibes-Q4_K_M
 #   powershell -ExecutionPolicy Bypass -File scripts\start-all.ps1 -Mock        # 不加载模型，跑模拟模式
 #   powershell -ExecutionPolicy Bypass -File scripts\start-all.ps1 -NoBrowser   # 不自动开浏览器
 #   powershell -ExecutionPolicy Bypass -File scripts\start-all.ps1 -Lan         # 允许局域网访问
@@ -51,8 +51,8 @@ function Get-PortListener {
 function Test-HttpOk {
     param([string]$Uri, [int]$TimeoutSec = 4)
     try {
-        $response = Invoke-WebRequest -Uri $Uri -UseBasicParsing -TimeoutSec $TimeoutSec
-        return ($response.StatusCode -eq 200)
+        $response = Invoke-LocalHttp -Uri $Uri -TimeoutSec $TimeoutSec
+        return $response.Ok
     } catch {
         return $false
     }
@@ -73,7 +73,13 @@ if ($Restart) {
 }
 
 # --- 1. 模型服务 -------------------------------------------------------------
-if (-not $Mock -and -not $SkipModels) {
+$modeCode = "import sys; sys.path.insert(0, 'src'); from core.config import load_config; c=load_config().llm; print(c.mode+':'+c.backend)"
+Push-Location $ProjectRoot
+try { $connectionMode = (& $python -c $modeCode | Select-Object -Last 1) } finally { Pop-Location }
+if ($LASTEXITCODE -ne 0) { Write-Err2 '模型配置读取失败'; exit 1 }
+$connectionBackend = ($connectionMode -split ':')[1]
+$connectionMode = ($connectionMode -split ':')[0]
+if (-not $Mock -and -not $SkipModels -and $connectionMode -ne 'api') {
     if (Test-HttpOk -Uri 'http://127.0.0.1:8080/health' -TimeoutSec 3) {
         Write-Ok '检测到对话模型服务已在运行（端口 8080），直接复用'
     } else {
@@ -94,10 +100,11 @@ if (-not $Mock -and -not $SkipModels) {
             }
         } else {
             Write-Step '启动模型服务（后台）'
-            $modelArgs = @('-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'start-models.ps1'))
+            $modelScript = if ($connectionBackend -eq 'vllm') { 'start-vllm.ps1' } else { 'start-models.ps1' }
+            $modelArgs = @('-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot $modelScript))
             if ($Root) { $modelArgs += @('-Root', $Root) }
             if ($Tier) { $modelArgs += @('-Tier', $Tier) }
-            $modelProc = Start-Process -FilePath 'powershell.exe' -ArgumentList $modelArgs -PassThru -WindowStyle Minimized
+            $modelProc = Start-Process -FilePath 'powershell.exe' -ArgumentList $modelArgs -PassThru -WindowStyle Hidden
             Write-Host "    模型服务启动进程 PID $($modelProc.Id)，日志见 logs\llama-chat.log"
             Write-Warn2 '首次加载 27B 模型需要 1~3 分钟；网页此时可以打开，但提问要等模型就绪。'
         }
@@ -183,6 +190,8 @@ if ($ok) {
     }
 }
 
+if (-not $ok) { exit 1 }
+
 # --- 4. 记录 PID -------------------------------------------------------------
 if ($apiPid -and -not $apiAlreadyUp) {
     $pidFile = Join-Path $ProjectRoot 'data\app.pids.json'
@@ -198,7 +207,7 @@ if (-not (Test-HttpOk -Uri 'http://127.0.0.1:8081/health' -TimeoutSec 3)) {
     Write-Host '      powershell -ExecutionPolicy Bypass -File scripts\download-models.ps1 -Mirror -Support' -ForegroundColor DarkGray
 }
 
-# --- 6. 打开浏览器 -----------------------------------------------------------
+# --- 6. 输出服务信息 -----------------------------------------------------------
 $lanIp = $null
 if ($Lan) {
     $lanIp = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
@@ -217,4 +226,4 @@ Write-Host ' 关闭服务：powershell -ExecutionPolicy Bypass -File scripts\sto
 Write-Host ' 查看状态：powershell -ExecutionPolicy Bypass -File scripts\verify.ps1 -Quick'
 Write-Host ''
 
-if (-not $NoBrowser) { Start-Process $url }
+Write-Host '打开网页：右键桌宠 → 打开网页'

@@ -30,6 +30,24 @@ def test_paths_reject_model_outside_root(tmp_path: Path) -> None:
     assert paths.assert_on_project_root(inside) == inside.resolve()
 
 
+def test_external_model_directory_is_used_after_config_merge(tmp_path):
+    from core.config import load_config
+    from llm.supervisor import ModelSupervisor
+    from speech import _resolve_from_root
+
+    root, models = tmp_path / "app", tmp_path / "Models"
+    config_dir = root / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.json").write_text(json.dumps({"paths": {"models_dir": str(models)}}))
+    cfg = load_config(root)
+    assert cfg.paths.gguf_dir == models / "gguf"
+    assert cfg.paths.cache_dir == models / "cache"
+    assert cfg.paths.voices_dir == models / "voices"
+    assert cfg.paths.assert_on_project_root(models / "gguf/model.gguf") == (models / "gguf/model.gguf").resolve()
+    assert ModelSupervisor(root, cfg).models_dir == models
+    assert Path(_resolve_from_root(cfg, "models/tts/test")) == models / "tts/test"
+
+
 def test_config_yaml_overrides_and_env(tmp_path: Path, monkeypatch) -> None:
     from core.config import load_config
 

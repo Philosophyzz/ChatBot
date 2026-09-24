@@ -31,10 +31,11 @@ if (-not $NoBackend) {
 
 $args = @((Join-Path $ProjectRoot 'run_pet.py'), '--url', $Url)
 if ($Persona) { $args += @('--persona', $Persona) }
+if ($NoBackend) { $args += '--no-backend' }
 
 Write-Step '启动桌宠'
 Write-Host "  解释器：$py"
-Write-Host '  按住麦克风按钮说话；右键打开菜单；托盘图标可隐藏/显示；双击打开完整网页界面。'
+Write-Host '  按住麦克风按钮说话；右键打开菜单；托盘图标可隐藏/显示；滚轮缩放；单击触摸；双击聊天；右键选择打开网页。'
 
 if ($Hidden) {
     Start-Process -FilePath $py -ArgumentList $args -WorkingDirectory $ProjectRoot -WindowStyle Hidden | Out-Null

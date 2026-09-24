@@ -12,7 +12,7 @@
 #
 # 用法：
 #   powershell -ExecutionPolicy Bypass -File scripts\start-models.ps1
-#   powershell -ExecutionPolicy Bypass -File scripts\start-models.ps1 -Tier balanced-14b
+#   powershell -ExecutionPolicy Bypass -File scripts\start-models.ps1 -Tier Qwen3.6-14B-A3B-FableVibes-Q4_K_M
 #   powershell -ExecutionPolicy Bypass -File scripts\start-models.ps1 -NoSupport
 #   powershell -ExecutionPolicy Bypass -File scripts\start-models.ps1 -ChatOnly
 #
@@ -22,7 +22,7 @@
 #     1) 启动后执行  nvidia-smi
 #     2) 若 "memory.free" 还有 1GB 以上富余，把 -NGpuLayers 加 2~4 再试
 #     3) 若报 OOM 或显存打满导致卡顿，减 2~4
-#   想要满速就换档：-Tier balanced-14b（权重全进显存）
+#   想要满速就换档：-Tier Qwen3.6-14B-A3B-FableVibes-Q4_K_M（权重全进显存）
 # =============================================================================
 
 [CmdletBinding()]
@@ -57,12 +57,21 @@ if (-not $tierSpec) {
     exit 1
 }
 
-$ggufDir = Join-Path $ProjectRoot 'models\gguf'
+$ggufDir = Join-Path (Get-ModelsRoot -Root $ProjectRoot) 'gguf'
 $chatModel = Join-Path $ggufDir $tierSpec.local_name
 if (-not (Test-Path -LiteralPath $chatModel)) {
     Write-Err2 "模型文件不存在：$chatModel"
     Write-Host "    请先运行: scripts\download-models.ps1 -Tier $Tier"
     exit 1
+}
+$extraChatArgs = @()
+if ($tierSpec.PSObject.Properties['mmproj_local_name'] -and $tierSpec.mmproj_local_name) {
+    $mmprojPath = Join-Path $ggufDir $tierSpec.mmproj_local_name
+    if (-not (Test-Path -LiteralPath $mmprojPath)) {
+        Write-Err2 "模型图像投影文件不存在：$mmprojPath"
+        exit 1
+    }
+    $extraChatArgs += @('--mmproj', $mmprojPath)
 }
 
 if ($NGpuLayers -eq -999) { $NGpuLayers = [int]$tierSpec.n_gpu_layers }
@@ -153,16 +162,17 @@ Write-Host '    提示：16GB 卡上若已有浏览器/通讯软件占用 3~4GB�
 # --- 对话模型 ---------------------------------------------------------------
 # --alias 必须与 config/config.yaml 的 llm.model 完全一致，否则请求会被模型服务
 # 以「模型不存在」拒绝（llama-server 只响应它自己注册的别名）。
-# 这里用档位 id 作别名（quality-27b / balanced-14b / fast-9b）：它稳定、与档位一一
+# 这里用档位 id 作别名（Qwen3.6-27B-Q4_K_M-mtp / Qwen3.6-14B-A3B-FableVibes-Q4_K_M / Qwen3.5-9B-Q4_K_M）：它稳定、与档位一一
 # 对应。早期硬编码的 'qwen3.6-27b' 一换档位就对不上。
 $chatAlias = $Tier
 Write-Step "启动对话模型（别名 $chatAlias）"
 $chat = Start-LlamaServer -Name "llama-chat" -ModelPath $chatModel -Port 8080 `
-    -Alias $chatAlias -Ctx $ContextSize -GpuLayers $NGpuLayers
+    -Alias $chatAlias -Ctx $ContextSize -GpuLayers $NGpuLayers -ExtraArgs @($extraChatArgs + @(if ($tierSpec.PSObject.Properties['server_args']) { $tierSpec.server_args }))
 if ($chat) {
     $pids['chat'] = $chat.Id
+    $pids['chat_tier'] = $Tier
     Write-Ok "llama-chat PID $($chat.Id)  别名 $chatAlias  日志 logs\llama-chat.log"
-    if ($chatAlias -ne 'quality-27b') {
+    if ($chatAlias -ne 'Qwen3.6-27B-Q4_K_M-mtp') {
         Write-Host "    记得同步 config\config.yaml 的 llm.model: $chatAlias" -ForegroundColor DarkGray
     }
 }
@@ -170,7 +180,7 @@ if ($chat) {
 # --- 辅助模型 ---------------------------------------------------------------
 if (-not $ChatOnly -and -not $NoSupport) {
     foreach ($spec in $modelsConfig.support_models) {
-        if ($spec.kind -eq 'python') { continue }
+        if ($spec.PSObject.Properties['kind'] -and $spec.kind -eq 'python') { continue }
         $path = Join-Path $ggufDir $spec.local_name
         if (-not (Test-Path -LiteralPath $path)) {
             Write-Warn2 "$($spec.id) 未下载，跳过。$($spec.notes)"
@@ -232,6 +242,7 @@ $pidFile = Join-Path $ProjectRoot 'data\model-server.pids.json'
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $pidFile) | Out-Null
 $pids | ConvertTo-Json | Set-Content -LiteralPath $pidFile -Encoding UTF8
 Write-Ok "PID 已记录到 data\model-server.pids.json"
+if ($ready.Count -lt $ports.Count) { exit 1 }
 
 Write-Host ''
 Write-Host '模型服务就绪。可用接口：' -ForegroundColor White

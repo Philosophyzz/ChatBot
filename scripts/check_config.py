@@ -164,6 +164,9 @@ def check_yaml() -> Dict[str, Any]:
                 if not isinstance(spec, dict):
                     fail(f"人设 {persona_id} 的定义不是对象")
                     continue
+                sys.path.insert(0, str(ROOT / "src"))
+                from persona.catalog import CATALOG
+                spec = {**CATALOG.get(persona_id, {}), **spec}
                 if not str(spec.get("system_prompt") or "").strip():
                     fail(f"人设 {persona_id} 缺少 system_prompt")
                 voice = spec.get("voice") or {}
@@ -174,8 +177,11 @@ def check_yaml() -> Dict[str, Any]:
 
 
 def check_paths() -> None:
-    print("检查路径契约（模型必须在项目根目录内）…")
+    print("检查路径契约（模型使用配置目录）…")
     root = ROOT.resolve()
+    sys.path.insert(0, str(root / "src"))
+    from core.config import load_config
+    model_root = load_config(root).paths.models_dir.resolve()
     config_dir = root / "config"
     offenders: List[str] = []
     for name in ("config.yaml", "models.json"):
@@ -183,6 +189,7 @@ def check_paths() -> None:
         if not path.exists():
             continue
         text = path.read_text(encoding="utf-8")
+        text = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
         # Look for absolute Windows paths (D:\... or D:/...) in model settings, while
         # ignoring URLs — "http://127.0.0.1:8080/v1" would otherwise look like the
         # drive-letter-plus-slash shape.
@@ -190,14 +197,14 @@ def check_paths() -> None:
             raw = match.group(0)
             candidate = Path(raw.replace("\\\\", "\\"))
             try:
-                candidate.resolve().relative_to(root)
-            except ValueError:
+                assert any(candidate.resolve().is_relative_to(base) for base in (root, model_root))
+            except (ValueError, AssertionError):
                 offenders.append(f"{name}: {raw}")
     if offenders:
         for item in offenders:
-            fail(f"模型路径不在项目根目录内：{item}")
+            fail(f"模型路径不在配置目录内：{item}")
     else:
-        ok("未发现指向项目外的模型路径")
+        ok("模型路径检查通过")
     for directory in ("models", "data", "logs", "web", "src"):
         if not (root / directory).exists():
             warn(f"目录缺失（首次启动会自动创建）：{directory}")

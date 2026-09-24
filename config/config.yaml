@@ -1,173 +1,357 @@
 # ============================================================================
+
 # 本地 LLM 聊天机器人 —— 主配置
+
 #
+
 # 优先级（低 → 高）：
+
 #   config.yaml  →  config/local.yaml（设置界面写入）  →  环境变量 CHATBOT_*
+
 #   环境变量用双下划线表示层级，例如：
+
 #     CHATBOT_LLM__TEMPERATURE=0.4
+
 #     CHATBOT_SERVER__PORT=9000
+
 #
+
 # 所有路径都相对于项目根目录（首次启动时写入 local.yaml 的 paths.root），
-# 模型权重一律落在 <项目根>/models 下，即 D 盘。
+
+# 模型权重统一存放在 paths.models_dir，当前为 D:/Models。
+
 # ============================================================================
 
+
+
 # 默认人设：对应 config/personas.yaml 或内置目录中的 id
-# 这里指向你自己的人设（温柔姐姐），内置人设只是兜底，不会自动成为默认。
-default_persona: gentle_sister
+
+# 每位角色绑定专属立绘、初始记忆和神经音色。
+
+paths:
+  models_dir: D:/Models
+
+# 情绪分类使用当前聊天模型；失败或超时继续正常聊天，无需额外服务。
+emotion:
+  enabled: true
+  model_analysis: true
+  timeout_s: 4
+  state_ttl_s: 21600
+
+default_persona: hiyori
+
 log_level: INFO
+
 # 打开后：API 响应里会带上检索到的记忆明细与评分拆解，便于调参
+
 debug: false
 
+
+
 llm:
+
+  mode: local  # local 本地部署 | api 外部兼容 API
+
   # 后端类型，可插拔：llamacpp | ollama | vllm | openai | mock
+
   # 注意：llamacpp / ollama / vllm / openai 共用同一个 OpenAI 兼容客户端，
+
   # 区别只是默认端口与用途；新增运行时只需在 plugs/ 下注册同名实现。
+
   backend: llamacpp
+
   # mock=true 时使用内置脚本模型：无需 GPU、无需下载，用于跑通全链路自检
+
   mock: false
+
   base_url: http://127.0.0.1:8080/v1
+
   api_key: sk-local
+
   # 必须与 scripts/start-models.ps1 启动时用的 --alias 一致（那里用档位 id），
+
   # 也必须与 config/models.json 的 default_tier 一致。
-  # 可选：quality-27b | balanced-14b | fast-9b
-  # 当前用 quality-27b。想换更快的档位见 config/models.json 顶部说明。
-  model: fast-9b
+
+  # 可选：MiMo-V2.6-Distill-Qwen-9B-Q8_0 | Qwen3.6-27B-Q4_K_M-mtp | Qwen3.6-14B-A3B-FableVibes-Q4_K_M | Qwen3.5-9B-Q4_K_M
+
+  # 当前用 ggml-org 的 MiMo-V2.6-Distill-Qwen-9B-Q8_0。
+
+  model: MiMo-V2.6-Distill-Qwen-9B-Q8_0
+
   temperature: 0.75
+
   top_p: 0.9
+
   max_tokens: 700
+
   # 上下文窗口。27B Q4 在 16GB 卡上建议 8192：
+
   # 更大的窗口会让 KV cache 挤占权重所在显存，触发层回退到 CPU，速度骤降。
+
   context_tokens: 8192
+
   reserve_tokens: 900
+
   request_timeout_s: 300
+
   max_retries: 2
 
+
+
 memory:
+
   # 存储与检索组件，均可插拔
+
   store: sqlite
+
   embedder: llamacpp          # llamacpp | hash
+
   fallback_embedder: hash     # 嵌入服务不可用时自动降级，记忆不会中断
+
   reranker: llamacpp          # llamacpp | heuristic | none
+
   dim: 1024                   # 与 Qwen3-Embedding-0.6B 输出维度一致
 
+
+
   # ---- 检索 ----
+
   top_k: 14
+
   token_budget: 1400          # 注入提示词的记忆块 token 预算
+
   # 打分权重：向量 / 词法BM25 / 图谱 / 重要度 / 时间新鲜度 / 重排
+
   w_dense: 1.0
+
   w_lexical: 0.70
+
   w_graph: 0.60
+
   w_importance: 0.35
+
   w_recency: 0.25
+
   w_rerank: 1.20
+
   # 时间衰减半衰期（天）：越小越"健忘"，越大越"念旧"
+
   recency_half_life_days: 21
 
+
+
   # ---- 抽取（写入路径）----
+
   extract_async: true          # 异步抽取，绝不拖慢回复
+
   extract_every_n_turns: 1
+
   extract_min_chars: 8
+
   max_items_per_turn: 8
+
   # 冲突判定阈值：同一 subject+predicate 下两条记忆的余弦相似度
+
   contradiction_threshold: 0.86
 
+
+
   # ---- 固化（睡眠期计算）----
+
   consolidate_enabled: true
+
   consolidate_interval_s: 1800   # 每 30 分钟检查一次
+
   consolidate_idle_s: 300        # 且最近 5 分钟无人说话
+
   consolidate_min_episodes: 24
+
   reflections_enabled: true      # 从事实簇中提炼更高层洞察
 
+
+
 extraction:
+
   enabled: true
+
   temperature: 0.1
+
   max_tokens: 900
+
   context_turns: 6
+
   min_chars: 6
 
+
+
 speech:
+
   stt_backend: faster_whisper
+
   tts_backend: router
+
   # 后端优先级（路由器会做健康探测并自动跳过故障后端）。
+
   # 重要：默认顺序是"音质优先"。本地 IndexTTS2 音质最好且可克隆音色；
+
   # edge 是在线但音质很好；sapi 是 Windows 自带的老式音色，只作最后兜底。
+
   tts_preference: [indextts, edge, sapi]
+
   # prefer_offline=true 会让**有能力离线运行**的后端排在前面（隐私优先：
+
   # 不让文本离开本机）。注意它对 sapi 这类老旧离线音色不起作用 ——
+
   # 见 tts_backends.sapi.priority，它被固定排在所有后端之后。
+
   prefer_offline: false
+
   # ---- 识别 ----
+
   # 模型名三种写法都行：
+
   #   large-v3-turbo                              短名（自动映射到镜像上能下的仓库）
+
   #   deepdml/faster-whisper-large-v3-turbo-ct2   HuggingFace 仓库 id（首次自动下载 1.6GB）
+
   #   models/whisper/large-v3-turbo               本地目录（手动下载后指过来，完全不联网）
+
   stt_model: large-v3-turbo
+
   stt_device: cuda
+
   stt_compute_type: int8_float16
+
   stt_language: zh
+
   # 首次下载权重时的 HuggingFace 端点。国内直连 huggingface.co 基本下不动，默认走镜像；
+
   # 同时会自动关闭 Xet（镜像不代理 Xet，开着会 401）。留空字符串则用官方站点。
+
   stt_endpoint: https://hf-mirror.com
+
   # 空闲多久后释放语音模型显存（秒）。这是"27B + 语音"能共存的关键。
+
   stt_idle_unload_s: 900
+
   vad_filter: true
+
   max_utterance_s: 60
+
   # ---- 合成速度 ----
+
   # 语音按块合成、合成一块就发一块，所以这个数字基本等于"等多久听到第一个字"。
+
   # 40 字约 2~4 秒语音；调小=更快出声但请求更多（在线后端每次请求都有固定开销），
+
   # 调大=出声更晚但总请求更少。实测 edge-tts 把整段 80 字放一次请求要等 17 秒。
+
   tts_chunk_chars: 40
+
   # 同时合成几块。edge-tts 在本机一次请求 1.5~5 秒，2 路并发能明显缩短总时长，
+
   # 又不容易触发它的限流（NoAudioReceived）。本地后端可以调到 3~4。
+
   tts_chunk_concurrency: 2
 
+
+
 server:
+
   host: 127.0.0.1
+
   port: 8077
+
   # 改成 true 并重启后，同局域网手机可访问（注意：无鉴权，仅限可信网络）
+
   allow_lan: false
+
   cors_origins:
+
     - http://127.0.0.1:8077
+
     - http://localhost:8077
+
   max_audio_bytes: 25165824
+
   serve_static: true
 
+
+
 # ---- 插件私有配置命名空间（由插件自行读取，核心不解释）----
+
 embedding:
+
   base_url: http://127.0.0.1:8081/v1
-  model: qwen3-embedding-0.6b
+
+  model: MiMo-V2.6-Distill-Qwen-9B-Q8_0
+
+
 
 reranker:
+
   base_url: http://127.0.0.1:8082/v1
-  model: qwen3-reranker-0.6b
+
+  model: MiMo-V2.6-Distill-Qwen-9B-Q8_0
+
+
 
 tts:
+
   # 各后端的**质量档位**（数字越小越优先）。这是选择顺序的权威来源；
+
   # 只有未在此列出的后端才回退到 speech.tts_preference 的顺序。
+
   #
+
   # 为什么需要它：speech.prefer_offline 会把"能离线跑"的后端提前，结果 Windows
+
   # SAPI（离线、但音色是上世纪的）压过了 edge（在线、中文音质很好）——
+
   # 为了隐私牺牲音质是错的取舍。用显式 priority 把质量意图写死，
+
   # SAPI 永远最后，而 prefer_offline 仍然可以用来在**同级音质**间表达隐私偏好。
+
   tts_backends:
+
     indextts:
+
       priority: 10          # 本地零样本克隆，音质最好（需单独装环境）
+
     edge:
+
       priority: 20          # 在线神经音色，中文音质很好，免费
+
     openai:
+
       priority: 30          # 自建/第三方 OpenAI 兼容 TTS
+
     sapi:
+
       priority: 90          # Windows 自带，仅兜底（音色机械但永远可用）
+
   # 下面是与 build_tts 对齐的后端参数
+
   indextts:
+
     # 模型目录由 scripts/download-models.ps1 下载到 D 盘
-    model_dir: models/tts/IndexTTS2
+
+    model_dir: D:/Models/tts/IndexTTS2
+
     device: cuda:0
+
     idle_unload_s: 600
+
     fp16: true
+
     # 默认参考音频：把一段 5~15 秒的甜美女声放到 models/voices/ 下
-    default_reference: models/voices/default_sweet.wav
+
+    default_reference: D:/Models/voices/default_sweet.wav
+
   edge:
+
     default_voice: zh-CN-XiaoxiaoNeural
+
   openai_base_url: http://127.0.0.1:8090/v1
+
   openai_model: tts-1

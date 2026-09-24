@@ -64,3 +64,6 @@ config/local.yaml
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# Unified desktop entry point
+/启动聊天机器人.exe

@@ -59,6 +59,11 @@ class Tier:
     file: str = ""
     server_args: List[str] = field(default_factory=list)
     fallback_repos: List[Dict[str, str]] = field(default_factory=list)
+    mmproj_local_name: str = ""
+    mmproj_repo: str = ""
+    mmproj_file: str = ""
+    mmproj_sha256: str = ""
+    sha256: str = ""
 
     @classmethod
     def from_dict(cls, raw: Dict[str, Any]) -> "Tier":
@@ -75,10 +80,20 @@ class Tier:
             file=str(raw.get("file") or ""),
             server_args=[str(item) for item in (raw.get("server_args") or [])],
             fallback_repos=list(raw.get("fallback_repos") or []),
+            mmproj_local_name=str(raw.get("mmproj_local_name") or ""),
+            mmproj_repo=str(raw.get("mmproj_repo") or ""),
+            mmproj_file=str(raw.get("mmproj_file") or ""),
+            mmproj_sha256=str(raw.get("mmproj_sha256") or ""),
+            sha256=str(raw.get("sha256") or ""),
         )
 
-    def path(self, root: Path) -> Path:
-        return root / "models" / "gguf" / self.local_name
+    def path(self, root: Path, models_dir: Optional[Path] = None) -> Path:
+        return (Path(models_dir) if models_dir else root / "models") / "gguf" / self.local_name
+
+    def mmproj_path(self, root: Path, models_dir: Optional[Path] = None) -> Optional[Path]:
+        if not self.mmproj_local_name:
+            return None
+        return (Path(models_dir) if models_dir else root / "models") / "gguf" / self.mmproj_local_name
 
 
 def _no_proxy_opener() -> urllib.request.OpenerDirector:
@@ -114,6 +129,7 @@ class ModelSupervisor:
     ) -> None:
         self.root = Path(root)
         self.config = config
+        self.models_dir = getattr(getattr(config, "paths", None), "models_dir", self.root / "models")
         self.port = int(port)
         self.health_timeout_s = health_timeout_s
         self.start_grace_s = start_grace_s
@@ -220,7 +236,9 @@ class ModelSupervisor:
         current = self.current_tier() if listening else None
         tiers = []
         for tier in self.tiers():
-            path = tier.path(self.root)
+            path = tier.path(self.root, self.models_dir)
+            mmproj = tier.mmproj_path(self.root, self.models_dir)
+            downloaded = path.is_file() and (mmproj is None or mmproj.is_file())
             tiers.append(
                 {
                     "id": tier.id,
@@ -230,10 +248,12 @@ class ModelSupervisor:
                     "n_gpu_layers": tier.n_gpu_layers,
                     "expected_tps": tier.expected_tps,
                     "notes": tier.notes,
-                    "downloaded": path.exists(),
+                    "downloaded": downloaded,
+                    "mmproj_downloaded": mmproj is None or mmproj.is_file(),
                     "current": tier.id == current,
                     "server_args": tier.server_args,
-                    "download_command": self.download_command(tier.id) if not path.exists() else "",
+                    "mmproj_local_name": tier.mmproj_local_name or None,
+                    "download_command": self.download_command(tier.id) if not downloaded else "",
                 }
             )
         return {
@@ -247,11 +267,30 @@ class ModelSupervisor:
         }
 
     # -- switching ---------------------------------------------------------------------
+    def check_audio_training(self) -> None:
+        """Keep an owned finite audio experiment from racing another model load."""
+        try:
+            state = json.loads((self.root / 'data/asmr/lab-state.json').read_text(encoding='utf-8'))
+            if state.get('state') != 'running' or state.get('pid') == os.getpid():
+                return
+            import psutil
+            owner = psutil.Process(int(state['pid']))
+            if any(Path(arg).name == 'asmr_lab.py' for arg in owner.cmdline()):
+                raise ModelSwitchError('ASMR 生成/训练正在使用显卡，完成后会恢复聊天模型；请稍后切换。')
+        except ModelSwitchError:
+            raise
+        except (OSError, ValueError, KeyError, TypeError, ImportError):
+            return
+        except Exception:
+            return  # An expired/reused process record must never prevent normal startup.
+
     def switch(self, tier_id: str, *, on_ready: Optional[Any] = None) -> Dict[str, Any]:
         """Stop the current chat server and bring up ``tier_id``. Blocking (30–120 s)."""
+        self.check_audio_training()
         tier = self.tier(tier_id)
-        model_path = tier.path(self.root)
-        if not model_path.exists():
+        model_path = tier.path(self.root, self.models_dir)
+        mmproj_path = tier.mmproj_path(self.root, self.models_dir)
+        if not model_path.is_file() or (mmproj_path is not None and not mmproj_path.is_file()):
             raise ModelSwitchError(
                 f"档位 {tier.id} 的模型还没下载：{model_path.name}\n"
                 f"先在终端里执行：{self.download_command(tier.id)}"
@@ -392,6 +431,11 @@ class ModelSupervisor:
             *self.default_server_args(),
             *tier.server_args,
         ]
+        mmproj_path = tier.mmproj_path(self.root, self.models_dir)
+        if mmproj_path is not None:
+            if not mmproj_path.is_file():
+                raise ModelSwitchError(f"模型的图像投影文件不存在：{mmproj_path.name}，请重新下载 {tier.id}")
+            argv.extend(["--mmproj", str(mmproj_path)])
         logs = self.root / "logs"
         logs.mkdir(parents=True, exist_ok=True)
         out = open(logs / "llama-chat.log", "ab", buffering=0)

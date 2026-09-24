@@ -28,6 +28,7 @@ MUST_BE_IGNORED = (
     "venvs/main/Scripts/python.exe",
     "build/ChatBotPet/Analysis-00.toc",
     "dist/ChatBotPet.exe",
+    "启动聊天机器人.exe",
     "__pycache__/x.cpython-311.pyc",
     ".agent-teams/state.json",
 )

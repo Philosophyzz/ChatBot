@@ -99,16 +99,16 @@ def test_rebind_points_the_live_client_at_the_new_alias() -> None:
 
     class FakeClient:
         def __init__(self) -> None:
-            self.model = "fast-9b"
+            self.model = "Qwen3.5-9B-Q4_K_M"
 
     app = ChatBotApp.__new__(ChatBotApp)  # avoid load_config()/logging side effects
-    app.config = type("Cfg", (), {"llm": type("Llm", (), {"model": "fast-9b"})()})()
+    app.config = type("Cfg", (), {"llm": type("Llm", (), {"model": "Qwen3.5-9B-Q4_K_M"})()})()
     app.llm = FakeClient()
     app.engine = type("Engine", (), {"llm": app.llm})()
 
-    app.rebind_chat_model("quality-35b")
-    assert app.config.llm.model == "quality-35b"
-    assert app.llm.model == "quality-35b", "客户端里的别名没更新，健康检查会报'未加载模型'"
+    app.rebind_chat_model("Qwen3.6-35B-A3B-UD-IQ2_XXS")
+    assert app.config.llm.model == "Qwen3.6-35B-A3B-UD-IQ2_XXS"
+    assert app.llm.model == "Qwen3.6-35B-A3B-UD-IQ2_XXS", "客户端里的别名没更新，健康检查会报'未加载模型'"
 
 
 def test_llm_port_is_read_from_the_configured_url() -> None:

@@ -70,6 +70,8 @@ class ChatEngine:
         self.personas = personas
         self.memory = memory
         self.sessions = sessions
+        from core.emotion import EmotionService
+        self.emotions = EmotionService(config, sessions.store.db) if sessions.store is not None else None
         self.stt = stt
         self.tts = tts
         self._active_turns = 0
@@ -115,6 +117,11 @@ class ChatEngine:
         messages = [Message(role=Role.SYSTEM, content=system_prompt)]
         messages.extend(history)
         messages.append(Message(role=Role.USER, content=user_text))
+        if self.emotions is not None and self.emotions.enabled:
+            emotion_hint = self.emotions.prompt(persona.id)
+            # Existing dialogue and memory retain priority in the context budget.
+            if emotion_hint and estimate_messages_tokens(messages) + estimate_tokens(emotion_hint) <= budget:
+                messages[0] = Message(role=Role.SYSTEM, content=system_prompt + emotion_hint)
 
         return {
             "persona": persona,
@@ -169,7 +176,7 @@ class ChatEngine:
 
         Event kinds (stable API for every channel):
         ``session``, ``memory``, ``memory_skipped``, ``start``, ``reasoning``,
-        ``text``, ``usage``, ``done``, ``error``.
+        ``emotion``, ``text``, ``usage``, ``done``, ``error``.
         """
         started = time.perf_counter()
         self._active_turns += 1
@@ -183,6 +190,22 @@ class ChatEngine:
             )
             session.voice_mode = voice_mode
             yield {"kind": "session", "session": session.public_summary()}
+
+            persona = self.personas.get(persona_id or session.persona_id)
+            user_message = Message(role=Role.USER, content=user_text,
+                                   meta={**(message_meta or {}), "session_id": session.id})
+            store = self.sessions.store
+            if store is not None:
+                try:
+                    await store.add_message(session.id, user_message, persona_id=persona.id,
+                                            scope=persona.memory_scope or scope)
+                    if self.emotions is not None and self.emotions.enabled:
+                        self.emotions.capture(user_message, persona.id, session.id)
+                        emotion = await self.emotions.assess(user_message, persona.id, session.id,
+                                                            session.messages, self.llm)
+                        yield {"kind": "emotion", "emotion": emotion}
+                except Exception:
+                    log.exception("could not persist user message or emotion")
 
             try:
                 prompt = await self.build_prompt(
@@ -207,23 +230,12 @@ class ChatEngine:
             else:
                 yield {"kind": "memory_skipped", "reason": "memory disabled"}
 
-            user_message = Message(
-                role=Role.USER,
-                content=user_text,
-                meta={**(message_meta or {}), "session_id": session.id},
-            )
             session.append(user_message)
             if self.memory is not None:
                 try:
                     await self.memory.store.ensure_conversation(
                         session.id,
                         title=session.title,
-                        persona_id=persona.id,
-                        scope=persona.memory_scope or scope,
-                    )
-                    await self.memory.store.add_message(
-                        session.id,
-                        user_message,
                         persona_id=persona.id,
                         scope=persona.memory_scope or scope,
                     )
@@ -292,21 +304,24 @@ class ChatEngine:
             session.append(assistant_message)
             session.last_memory = memory_context.to_public() if memory_context else {}
 
-            if self.memory is not None:
+            if store is not None:
                 try:
-                    await self.memory.store.add_message(
+                    await store.add_message(
                         session.id,
                         assistant_message,
                         tokens=stats.completion_tokens,
                         persona_id=persona.id,
                         scope=persona.memory_scope or scope,
                     )
-                    await self.memory.store.update_conversation(
+                    if self.emotions is not None and self.emotions.enabled:
+                        self.emotions.capture(assistant_message, persona.id, session.id)
+                    await store.update_conversation(
                         session.id,
                         summary=answer[:400] if session.turn_count <= 1 else None,
                     )
                 except Exception:  # noqa: BLE001
                     log.exception("failed to persist assistant message")
+            if self.memory is not None:
                 try:
                     await self.memory.remember_turn(
                         session_id=session.id,
@@ -386,7 +401,8 @@ class ChatEngine:
         for index, block in enumerate(blocks):
             if not block.strip():
                 continue
-            async for chunk in self.tts.synthesize(block, persona.voice, stream=stream):
+            voice = self.emotions.voice(persona) if self.emotions is not None else persona.voice
+            async for chunk in self.tts.synthesize(block, voice, stream=stream):
                 yield chunk
             await asyncio.sleep(0)  # yield control between sentences
 
